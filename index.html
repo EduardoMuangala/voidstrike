@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="pt">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VOIDSTRIKE — Arena 3D</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scene"></canvas>
+
+      <div id="hud">
+        <div class="row">
+          <div class="stat"><span>VIDA</span><b id="hp">100</b></div>
+          <div class="stat"><span>ONDA</span><b id="wave">1</b></div>
+          <div class="stat"><span>PONTOS</span><b id="score">0</b></div>
+          <div class="stat"><span>RECORDE</span><b id="best">0</b></div>
+        </div>
+        <div id="hpbar"><i id="hpfill"></i></div>
+        <div id="ammo">MUNIÇÃO <b id="ammoN">12</b> / 12</div>
+        <div id="mapname">MAPA · <b id="mapLabel">—</b></div>
+      </div>
+
+      <div id="teamhud">
+        <div class="tside ally"><span>ALIADOS</span><b id="allyN">3</b></div>
+        <div class="tside foe"><span>HOSTIS</span><b id="foeN">0</b></div>
+      </div>
+
+      <div id="minimapwrap">
+        <canvas id="minimap" width="220" height="220"></canvas>
+        <div class="mmtag">TACTICAL</div>
+      </div>
+
+      <div id="wavebanner"><span id="waveTitle"></span><small id="waveSub"></small></div>
+      <div id="killfeed"></div>
+      <div id="combo"><b id="comboN">x2</b><span>COMBO</span></div>
+
+      <div id="crosshair">
+        <i class="ch-t"></i><i class="ch-b"></i><i class="ch-l"></i><i class="ch-r"></i><i class="ch-tbar"></i>
+      </div>
+      <div id="hitmark"></div>
+      <div id="dmgpop"></div>
+
+      <div id="weaponhud">
+        <div class="wslot" data-slot="0"><b>1</b><span>RIFLE</span><i class="wammo">12</i></div>
+        <div class="wslot" data-slot="1"><b>2</b><span>SMG</span><i class="wammo">30</i></div>
+        <div class="wslot" data-slot="2"><b>3</b><span>SNIPER</span><i class="wammo">5</i></div>
+      </div>
+
+      <div id="ability">
+        <div class="abicon">❄</div>
+        <div class="abinfo"><b>PAREDE DE GELO</b><span id="abState">PRONTA · Q</span></div>
+        <div class="abbar"><i id="abFill"></i></div>
+      </div>
+      <div id="bombhud">
+        <div class="bicon">💣</div>
+        <div class="abinfo"><b>BOMBA</b><span id="bombState">PRONTA · G</span></div>
+        <div class="abbar"><i id="bombFill"></i></div>
+      </div>
+      <div id="dmgflash"></div>
+
+      <!-- ================= MENU PRINCIPAL ================= -->
+      <div id="menu" class="show">
+        <header id="topbar">
+          <div class="brand">
+            <span class="logo">VOIDSTRIKE</span>
+            <span class="ver">v2.4 · TACTICAL</span>
+          </div>
+          <div class="profile">
+            <div class="avatar" id="avatar">V</div>
+            <div class="pinfo">
+              <b id="pname">OPERADOR</b>
+              <span id="plevel">NÍVEL 1 · 0 XP</span>
+            </div>
+            <div class="pstats">
+              <div><span>PARTIDAS</span><b id="pMatches">0</b></div>
+              <div><span>ABATES</span><b id="pKills">0</b></div>
+              <div><span>RECORDE</span><b id="pBest">0</b></div>
+            </div>
+            <button class="ghost" id="editNameBtn">EDITAR</button>
+          </div>
+        </header>
+
+        <nav id="tabs">
+          <button class="tab on" data-tab="play">JOGAR</button>
+          <button class="tab" data-tab="multi">MULTIPLAYER</button>
+          <button class="tab" data-tab="friends">AMIGOS</button>
+          <button class="tab" data-tab="settings">DEFINIÇÕES</button>
+        </nav>
+
+        <main id="panels">
+          <!-- ---------- JOGAR ---------- -->
+          <section class="panel on" data-panel="play">
+            <div class="col">
+              <h2 class="sect">MODO DE JOGO</h2>
+              <div class="modes" id="modeList">
+                <div class="mode sel" data-mode="solo">
+                  <b>SOLO SURVIVAL</b>
+                  <p>Tu + 3 aliados contra ondas infinitas de hostis.</p>
+                  <span class="tag">TREINO</span>
+                </div>
+                <div class="mode" data-mode="ranked">
+                  <b>RANKED 4v4</b>
+                  <p>Partidas competitivas com progressão de XP e nível.</p>
+                  <span class="tag">COMPETITIVO</span>
+                </div>
+                <div class="mode" data-mode="custom">
+                  <b>CUSTOM</b>
+                  <p>Escolhe mapa e dificuldade à tua medida.</p>
+                  <span class="tag">LIVRE</span>
+                </div>
+              </div>
+
+              <h2 class="sect">DIFICULDADE</h2>
+              <div class="chips" id="diffList">
+                <button class="chip" data-diff="easy">FÁCIL</button>
+                <button class="chip on" data-diff="normal">NORMAL</button>
+                <button class="chip" data-diff="hard">DIFÍCIL</button>
+                <button class="chip" data-diff="insane">INSANO</button>
+              </div>
+            </div>
+
+            <div class="col">
+              <h2 class="sect">MAPA</h2>
+              <div class="maps" id="mapList"></div>
+
+              <h2 class="sect">CONTROLES</h2>
+              <ul class="keys">
+                <li><b>WASD</b> mover</li>
+                <li><b>RATO</b> olhar</li>
+                <li><b>CLIQUE</b> disparar</li>
+                <li><b>SHIFT</b> correr</li>
+                <li><b>ESPAÇO</b> saltar</li>
+                <li><b>R</b> recarregar</li>
+                <li><b>ESC</b> pausa</li>
+                <li><b>M</b> som</li>
+              </ul>
+            </div>
+
+            <div class="col launch">
+              <div class="summary">
+                <h2 class="sect">RESUMO</h2>
+                <div class="srow"><span>MODO</span><b id="sumMode">SOLO SURVIVAL</b></div>
+                <div class="srow"><span>MAPA</span><b id="sumMap">NEXUS</b></div>
+                <div class="srow"><span>DIFICULDADE</span><b id="sumDiff">NORMAL</b></div>
+                <div class="srow"><span>EQUIPA</span><b>4v4</b></div>
+                <div class="srow"><span>RECORDE</span><b id="sumBest">0</b></div>
+              </div>
+              <button id="startBtn" class="primary big">ENTRAR NA ARENA</button>
+              <p class="tip">Correção de mira ativa · cabeça = dano duplo · minimapa tático</p>
+            </div>
+          </section>
+
+          <!-- ---------- MULTIPLAYER ---------- -->
+          <section class="panel" data-panel="multi">
+            <div class="col wide">
+              <div class="rowhead">
+                <h2 class="sect">SALAS PÚBLICAS</h2>
+                <div class="rowtools">
+                  <input id="roomSearch" placeholder="filtrar por mapa ou nome..." />
+                  <button class="ghost" id="refreshRooms">ATUALIZAR</button>
+                  <button class="primary" id="createRoomBtn">CRIAR SALA</button>
+                </div>
+              </div>
+              <div class="tablewrap">
+                <table class="rooms">
+                  <thead>
+                    <tr>
+                      <th>SALA</th>
+                      <th>MAPA</th>
+                      <th>MODO</th>
+                      <th>JOGADORES</th>
+                      <th>PING</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="roomList"></tbody>
+                </table>
+              </div>
+              <p class="tip">Salas simuladas localmente — o motor de rede ainda não está ligado.</p>
+            </div>
+
+            <div class="col">
+              <h2 class="sect">CRIAR SALA</h2>
+              <div class="form">
+                <label>NOME DA SALA<input id="newRoomName" value="ARENA DE OPERADORES" /></label>
+                <label>MAPA
+                  <select id="newRoomMap">
+                    <option value="nexus">NEXUS</option>
+                    <option value="helix">HELIX</option>
+                  </select>
+                </label>
+                <label>MODO
+                  <select id="newRoomMode">
+                    <option>4v4 RANKED</option>
+                    <option>4v4 CASUAL</option>
+                    <option>SOLO SURVIVAL</option>
+                  </select>
+                </label>
+                <label>MÁX. JOGADORES
+                  <select id="newRoomMax">
+                    <option>8</option>
+                    <option>6</option>
+                    <option>4</option>
+                  </select>
+                </label>
+                <label class="check"><input type="checkbox" id="newRoomPrivate" /> SALA PRIVADA (POR CONVITE)</label>
+                <button class="primary" id="createRoomBtn2">CRIAR E ENTRAR</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- ---------- AMIGOS ---------- -->
+          <section class="panel" data-panel="friends">
+            <div class="col">
+              <div class="rowhead">
+                <h2 class="sect">LISTA DE AMIGOS</h2>
+                <span class="count" id="friendCount">0 online</span>
+              </div>
+              <div class="addrow">
+                <input id="friendInput" placeholder="nome ou ID do operador..." />
+                <button class="primary" id="addFriendBtn">ADICIONAR</button>
+              </div>
+              <ul class="friends" id="friendList"></ul>
+            </div>
+
+            <div class="col">
+              <h2 class="sect">PEDIDOS</h2>
+              <ul class="friends" id="requestList"></ul>
+              <h2 class="sect">SUGERIDOS</h2>
+              <ul class="friends" id="suggestList"></ul>
+            </div>
+          </section>
+
+          <!-- ---------- DEFINIÇÕES ---------- -->
+          <section class="panel" data-panel="settings">
+            <div class="col">
+              <h2 class="sect">ÁUDIO</h2>
+              <div class="form">
+                <label class="range">VOLUME GERAL <input type="range" id="setVol" min="0" max="100" value="70" /><b id="setVolV">70</b></label>
+                <label class="range">SENSIBILIDADE <input type="range" id="setSens" min="1" max="10" value="5" /><b id="setSensV">5</b></label>
+                <label class="range">CORREÇÃO DE MIRA <input type="range" id="setAim" min="0" max="12" value="6" /><b id="setAimV">6°</b></label>
+                <label class="range">MODO DE MIRA
+                  <select id="setAimMode">
+                    <option value="normal">PADRÃO (assistência sempre)</option>
+                    <option value="precise">PRECISA (manual com mira aberta)</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div class="col">
+              <h2 class="sect">JOGO</h2>
+              <div class="form">
+                <label class="check"><input type="checkbox" id="setMinimap" checked /> MOSTRAR MINIMAPA</label>
+                <label class="check"><input type="checkbox" id="setKillfeed" checked /> MOSTRAR KILLFEED</label>
+                <label class="check"><input type="checkbox" id="setShake" checked /> EFEITOS DE ECRÃ</label>
+                <button class="ghost" id="resetStatsBtn">APAGAR ESTATÍSTICAS</button>
+              </div>
+            </div>
+          </section>
+        </main>
+
+        <footer id="footbar">
+          <span id="footStatus">PRONTO</span>
+          <span>VOIDSTRIKE © 2026 · BUILD LOCAL</span>
+        </footer>
+      </div>
+
+      <!-- ================= MODAL ================= -->
+      <div id="modal" class="hidden">
+        <div class="modalbox">
+          <h3 id="modalTitle">TÍTULO</h3>
+          <p id="modalText"></p>
+          <div class="modalactions">
+            <button class="ghost" id="modalCancel">CANCELAR</button>
+            <button class="primary" id="modalOk">CONFIRMAR</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="pause" class="hidden">
+        <h2>PAUSA</h2>
+        <p class="sub">Clica para voltar ao combate</p>
+        <button id="resumeBtn">CONTINUAR</button>
+        <button class="ghost" id="quitBtn">SAIR PARA O MENU</button>
+      </div>
+
+      <div id="dead" class="hidden">
+        <h2>ELIMINADO</h2>
+        <p id="deadStats"></p>
+        <button id="retryBtn">TENTAR DE NOVO</button>
+        <button class="ghost" id="menuBtn">MENU PRINCIPAL</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
