@@ -2581,25 +2581,12 @@ interface Room {
   ping: number;
   locked: boolean;
 }
-const ROOM_NAMES = ['ARENA DE OPERADORES', 'NEXUS RANKED', 'HELIX SCRIM', 'NOITE DE TEMPESTADE', 'SQUAD DOS LOBOS', 'TREINO ABERTO', 'DUELO TÁTICO', 'VOID LEAGUE'];
-const ROOM_MODES = ['4v4 RANKED', '4v4 CASUAL', 'SOLO SURVIVAL'];
 let rooms: Room[] = [];
 let roomSeq = 1;
 
+/* sem bots: a lista só mostra salas criadas por jogadores reais */
 function genRooms() {
-  rooms = ROOM_NAMES.map((name, i) => {
-    const max = [8, 6, 4][i % 3];
-    return {
-      id: roomSeq++,
-      name,
-      map: i % 2 === 0 ? 'NEXUS' : 'HELIX',
-      mode: ROOM_MODES[i % 3],
-      players: 1 + Math.floor(Math.random() * (max - 1)),
-      max,
-      ping: 12 + Math.floor(Math.random() * 90),
-      locked: Math.random() < 0.15,
-    };
-  });
+  rooms = rooms.filter((r) => r.players > 0);
 }
 
 function renderRooms() {
@@ -2608,7 +2595,7 @@ function renderRooms() {
   body.innerHTML = '';
   const list = rooms.filter((r) => !q || r.name.toLowerCase().includes(q) || r.map.toLowerCase().includes(q));
   if (!list.length) {
-    body.innerHTML = '<tr><td colspan="6" class="empty">Nenhuma sala encontrada.</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="empty">Nenhuma sala ativa. Cria a tua sala para jogar com pessoas reais.</td></tr>';
     return;
   }
   for (const r of list) {
