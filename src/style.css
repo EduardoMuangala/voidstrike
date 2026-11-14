@@ -578,3 +578,7 @@ body:not(.ingame) #app {
 .room-members li.ready { border-color: var(--green); }
 .room-members li span { font-size: 11px; letter-spacing: 1px; color: var(--muted); }
 .room-members li.ready span { color: var(--green); }
+.room-members li em.net { font-style: normal; font-size: 11px; letter-spacing: 0.5px; color: var(--muted); }
+.room-members li em.net.on { color: var(--green); }
+.room-members li em.net.off { color: var(--red); }
+.room-members li em.net.you { color: var(--acc); }
