@@ -53,6 +53,9 @@ export class Hud {
       <div id="killfeed"></div>
       <div id="banner"><b></b><span></span></div>
       <div id="center-msg"></div>
+      <button class="hud-ui" id="jumpBtn" data-act="jump"><b>SALTAR</b><span>ESPAÇO</span></button>
+      <button class="hbtn hud-ui" id="mapBtn" data-act="map">MAPA<kbd>M</kbd></button>
+      <div class="hud-ui" id="bigmap" data-act="map"><canvas></canvas><span>TOCA PARA FECHAR · M</span></div>
       <button class="hud-ui" id="prompt" data-act="pickup">${ICON.hand}<span></span><kbd>F</kbd></button>
       <div class="hud-ui" id="vitals">
         <div class="armor" id="armorBadge">0</div>
@@ -82,6 +85,13 @@ export class Hud {
     `;
     parent.appendChild(el);
     this.el = el;
+    if (!isTouch) el.querySelectorAll<HTMLElement>('#mapBtn,#bigmap,#jumpBtn').forEach((b) =>
+        b.addEventListener('click', () => {
+          const code = b.id === 'jumpBtn' ? 'Space' : 'KeyM';
+          window.dispatchEvent(new KeyboardEvent('keydown', { code }));
+          window.dispatchEvent(new KeyboardEvent('keyup', { code }));
+        }),
+      );
     this.mini = this.$<HTMLCanvasElement>('#minimap canvas').getContext('2d')!;
     this.feed = this.$('#killfeed');
     this.pops = this.$('#pops');

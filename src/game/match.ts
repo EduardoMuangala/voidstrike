@@ -6,9 +6,14 @@ import { box, cyl, glow, mat, sphere } from '../models/materials';
 import { weaponMesh } from '../models/weapon';
 import { Actor, RADIUS } from './actor';
 import { World, type Wall } from './world';
+import type { MapId, Poi } from './maps';
 import { Fx } from './fx';
-import { Hud } from './hud';
+import { Hud, esc } from './hud';
 import { Input } from './input';
+import { Gloo } from './gloo';
+import { Plane } from './plane';
+import { Replay, FL, type Snap } from './replay';
+import { Spectator } from './spectator';
 
 export interface MatchResult {
   mode: ModeId;
@@ -21,10 +26,12 @@ export interface MatchResult {
   scoreA: number;
   scoreB: number;
   quit: boolean;
+  winner?: string;
 }
 
 export interface MatchOpts {
   mode: ModeId;
+  map: MapId;
   difficulty: Difficulty;
   renderer: THREE.WebGLRenderer;
   canvas: HTMLCanvasElement;
@@ -34,13 +41,13 @@ export interface MatchOpts {
 
 type LootKind = 'weapon' | 'med' | 'armor' | 'gel' | 'nade';
 interface Loot { kind: LootKind; wid?: WeaponId; n: number; obj: THREE.Group; pos: THREE.Vector3; alive: boolean; spin: number }
-interface Gel { wall: Wall; mesh: THREE.Mesh; life: number; grow: number }
 interface Nade { mesh: THREE.Mesh; pos: THREE.Vector3; vel: THREE.Vector3; fuse: number; owner: Actor }
 
 const GRAV = 22;
 const JUMP = 7.4;
 const SPEED = 6.2;
-const NAMES = ['xKiller', 'NinjaAO', 'Sombra77', 'Fénix', 'ReiDoCapim', 'Mamba', 'Kuduro', 'TugaSniper', 'Bala7', 'Jaguar', 'Mito_FF', 'LoboAlfa', 'ProPlayer', 'Zica', 'Raio', 'Pantera', 'Cobra', 'Trovão', 'Kamikaze', 'Ghost', 'Sniperzinho', 'Diamante', 'Bruxo', 'Dread', 'Kiala', 'Muxima', 'Zumbi', 'Nzola'];
+const BR_PLAYERS = 48;
+const BASE_NAMES = ['xKiller', 'NinjaAO', 'Sombra77', 'Fénix', 'ReiDoCapim', 'Mamba', 'Kuduro', 'TugaSniper', 'Bala7', 'Jaguar', 'Mito', 'LoboAlfa', 'ProPlayer', 'Zica', 'Raio', 'Pantera', 'Cobra', 'Trovão', 'Kamikaze', 'Ghost', 'Sniperzinho', 'Diamante', 'Bruxo', 'Dread', 'Kiala', 'Muxima', 'Zumbi', 'Nzola', 'Vulcão', 'Tigre', 'Falcão', 'Sobas', 'Kalunga', 'Fantasma', 'Ciclone', 'Neblina', 'Kanzala', 'Bumbo', 'Ritmo', 'Capitão', 'Tsunami', 'Orion', 'Nova', 'Furacão', 'Kwanza', 'Zeus', 'Hydra', 'Sniper99', 'Boladão', 'Malandro'];
 const ABIL_ICON: Record<AbilityId, string> = { dash: '⚡', heal: '✚', shield: '⛨', reveal: '◉', fury: '🔥' };
 const PREF_DIST: Record<WeaponId, number> = { ar: 22, smg: 12, sg: 6, sr: 55, dmr: 40, lmg: 24, pistol: 14 };
 const DIFF = {
@@ -49,19 +56,22 @@ const DIFF = {
   hard: { acc: 0.38, react: 0.3, dmg: 0.95, detect: 1.2, rate: 1 },
 };
 const ZONE_PHASES = [
-  { wait: 45, shrink: 35, r: 72, dps: 1.5 },
-  { wait: 35, shrink: 25, r: 44, dps: 3 },
-  { wait: 28, shrink: 20, r: 24, dps: 5 },
-  { wait: 22, shrink: 16, r: 10, dps: 8 },
-  { wait: 18, shrink: 14, r: 0, dps: 12 },
+  { wait: 55, shrink: 40, r: 120, dps: 1.5 },
+  { wait: 40, shrink: 30, r: 75, dps: 3 },
+  { wait: 30, shrink: 25, r: 45, dps: 5 },
+  { wait: 25, shrink: 20, r: 24, dps: 8 },
+  { wait: 20, shrink: 16, r: 10, dps: 12 },
+  { wait: 15, shrink: 14, r: 0, dps: 16 },
 ];
 const ARMOR_RED = [0, 0.2, 0.3, 0.42];
+const ARENA_R = 52;
 
 const tA = new THREE.Vector3();
 const tB = new THREE.Vector3();
 const tC = new THREE.Vector3();
 const tD = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
+const ringGeo = new THREE.RingGeometry(0.45, 0.6, 20).rotateX(-Math.PI / 2);
 
 const pick = <T>(a: T[]) => a[(Math.random() * a.length) | 0];
 const angDiff = (a: number, b: number) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
@@ -75,6 +85,13 @@ function randomOutfit(): Outfit {
   return o;
 }
 
+function makeNames(n: number) {
+  const out = [...BASE_NAMES].sort(() => Math.random() - 0.5);
+  let k = 1;
+  while (out.length < n) out.push(`${pick(BASE_NAMES)}${k++}`);
+  return out;
+}
+
 export class Match {
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
@@ -82,10 +99,10 @@ export class Match {
   fx = new Fx();
   hud: Hud;
   input: Input;
+  gloo: Gloo;
   actors: Actor[] = [];
   player: Actor;
   loot: Loot[] = [];
-  gels: Gel[] = [];
   nades: Nade[] = [];
   mode: ModeId;
   diff: Difficulty;
@@ -95,7 +112,22 @@ export class Match {
   scoreA = 0;
   scoreB = 0;
   total = 0;
+  plane: Plane | null = null;
+  private onPlane = new Set<Actor>();
+  private jumpAt = new Map<Actor, number>();
+  private landAt = new Map<Actor, THREE.Vector3>();
+  spec: Spectator | null = null;
+  replay: Replay | null = null;
+  replayOn = false;
+  replayT = 0;
+  replaySpeed = 1;
+  replayPaused = false;
+  private replayA = 0;
+  private replayB = 0;
+  private replayPrev = 0;
+  private snap: Snap = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, weapon: null, hp: 0, speed: 0 };
   private opts: MatchOpts;
+  far: number;
   private camDist = 3;
   private shake = 0;
   private fovNow = 72;
@@ -109,35 +141,38 @@ export class Match {
   private endT = -1;
   private result: MatchResult | null = null;
   private pauseEl: HTMLElement;
-  private zone = { cx: 0, cz: 0, r: 300, ncx: 0, ncz: 0, nr: 300, fcx: 0, fcz: 0, fr: 300, phase: -1, t: 0, shrinking: false, dps: 0 };
+  private deathEl: HTMLElement | null = null;
+  zone = { cx: 0, cz: 0, r: 300, ncx: 0, ncz: 0, nr: 300, fcx: 0, fcz: 0, fr: 300, phase: -1, t: 0, shrinking: false, dps: 0, started: false };
   private zoneWall: THREE.Mesh | null = null;
   private zoneRing: THREE.Mesh | null = null;
   private miniBase: HTMLCanvasElement;
-  private miniPpm: number;
-  private gelGeo = new THREE.BoxGeometry(3.6, 2.5, 0.44).translate(0, 1.25, 0);
-  private gelMat = new THREE.MeshLambertMaterial({ color: 0x9fe8ff, emissive: 0x1d5f7a, transparent: true, opacity: 0.8 });
   private auraGeo = new THREE.SphereGeometry(1.05, 14, 10);
   private auraMat = new THREE.MeshBasicMaterial({ color: 0x5ce1ff, transparent: true, opacity: 0.18, depthWrite: false });
   private nadeGeo = new THREE.SphereGeometry(0.13, 8, 6);
   private tagTimer = 0;
+  private mapOpen = false;
+  private mapT = 0;
+  arena: Poi | null = null;
 
   constructor(opts: MatchOpts) {
     this.opts = opts;
     this.mode = opts.mode;
     this.diff = opts.difficulty;
     const q = profile.settings.quality;
-    const far = q === 'low' ? 110 : q === 'medium' ? 160 : 230;
-    this.camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 1000);
+    this.far = q === 'low' ? 120 : q === 'medium' ? 175 : 250;
+    this.camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 700);
     this.camera.rotation.order = 'YXZ';
-    this.scene.fog = new THREE.Fog(0xcfe9ff, 25, far);
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x5d7a46, 1.6));
-    const sun = new THREE.DirectionalLight(0xfff0d6, 1.9);
-    sun.position.set(60, 100, 35);
-    this.scene.add(sun);
 
-    const kind = this.mode === 'br' ? 'island' : this.mode === 'squad' ? 'village' : 'range';
-    this.world = new World(kind, (Math.random() * 1e9) | 0);
+    const mapId: MapId = this.mode === 'train' ? 'range' : opts.map;
+    this.world = new World(mapId, (Math.random() * 1e9) | 0);
+    const sky = this.world.def.sky;
+    this.scene.fog = new THREE.Fog(sky.fog, 30, this.far);
+    this.scene.add(new THREE.HemisphereLight(sky.hemiSky, sky.hemiGround, sky.hemiInt));
+    const sun = new THREE.DirectionalLight(sky.sun, sky.sunInt);
+    sun.position.set(...sky.sunPos);
+    this.scene.add(sun);
     this.scene.add(this.world.group, this.fx.group);
+    this.gloo = new Gloo(this.scene, this.world, this.fx);
 
     this.hud = new Hud(opts.root, this.mode);
     this.input = new Input(opts.canvas, this.hud.el);
@@ -155,13 +190,13 @@ export class Match {
     });
     opts.root.appendChild(this.pauseEl);
 
-    // ---------------- actors
+    const watch = this.mode === 'watch';
     const p = new Actor(0, profile.name, 0, profile.hero, profile.outfit, true);
     this.player = p;
-    this.actors.push(p);
-    const names = [...NAMES].sort(() => Math.random() - 0.5);
+    if (!watch) this.actors.push(p);
+    const names = makeNames(BR_PLAYERS);
     const mkBot = (team: number) => {
-      const b = new Actor(this.actors.length, names.pop() || 'BOT', team, pick(HEROES).id, randomOutfit());
+      const b = new Actor(this.actors.length + (watch ? 1 : 0), names.pop() || 'BOT', team, pick(HEROES).id, randomOutfit());
       b.ai = {
         target: null, lastSeen: new THREE.Vector3(), seenT: 0, think: Math.random() * 0.3, strafe: 1, strafeT: 0, react: 0,
         burst: 4, burstPause: 0, goal: null, goalT: 0, stuckT: 0, lastPos: new THREE.Vector3(), detour: 0, detourT: 0,
@@ -171,18 +206,25 @@ export class Match {
       return b;
     };
 
-    if (this.mode === 'br') {
-      for (let i = 1; i < 16; i++) mkBot(i);
+    if (this.mode === 'br' || watch) {
+      const n = BR_PLAYERS - (watch ? 0 : 1);
+      for (let i = 0; i < n; i++) mkBot(i + 1);
+      this.plane = new Plane(this.world.radius, this.world.terrain.maxH + 75);
+      this.scene.add(this.plane.group);
       for (const a of this.actors) {
         a.give(2, 'pistol', a.isPlayer ? profile.weaponSkins.pistol || 'default' : 'default');
-        a.dropping = true;
-        const ang = Math.random() * Math.PI * 2, r = a.isPlayer ? Math.random() * 50 : 20 + Math.random() * 80;
-        a.pos.set(Math.cos(ang) * r, a.isPlayer ? 120 : 70 + Math.random() * 50, Math.sin(ang) * r);
-        a.yaw = Math.random() * Math.PI * 2;
+        this.onPlane.add(a);
+        a.rig.root.visible = false;
+        if (!a.isPlayer) this.planBotDrop(a);
       }
       this.spawnLoot();
       this.setupZone();
+      if (watch) {
+        p.alive = false;
+        this.spec = new Spectator(this, null, 'auto');
+      }
     } else if (this.mode === 'squad') {
+      this.setupArena();
       for (let i = 0; i < 3; i++) mkBot(0);
       for (let i = 0; i < 4; i++) mkBot(1);
       for (const a of this.actors) {
@@ -217,51 +259,116 @@ export class Match {
       this.scene.add(a.rig.root);
       a.rig.root.position.copy(a.pos);
     }
-
-    // minimap base
-    const W = this.world.radius + 10;
-    this.miniPpm = this.mode === 'br' ? 2 : 4;
-    const size = Math.ceil(W * 2 * this.miniPpm);
-    this.miniBase = document.createElement('canvas');
-    this.miniBase.width = this.miniBase.height = size;
-    const mc = this.miniBase.getContext('2d')!;
-    mc.fillStyle = '#1d6f9c';
-    mc.fillRect(0, 0, size, size);
-    mc.fillStyle = '#d9c48a';
-    mc.beginPath();
-    mc.arc(size / 2, size / 2, (this.world.radius + 6) * this.miniPpm, 0, Math.PI * 2);
-    mc.fill();
-    mc.fillStyle = this.mode === 'train' ? '#8f876a' : '#5f9a43';
-    mc.beginPath();
-    mc.arc(size / 2, size / 2, this.world.radius * this.miniPpm, 0, Math.PI * 2);
-    mc.fill();
-    for (const b of this.world.boxes) {
-      const h = b.maxY - b.minY;
-      mc.fillStyle = h > 2.5 ? '#e8e2d4' : h > 1.2 ? '#b9a98a' : '#7c8a62';
-      mc.fillRect((b.minX + W) * this.miniPpm, (b.minZ + W) * this.miniPpm, Math.max(1, (b.maxX - b.minX) * this.miniPpm), Math.max(1, (b.maxZ - b.minZ) * this.miniPpm));
+    if (this.mode !== 'train') {
+      this.replay = new Replay(this.actors.length);
+      this.gloo.onEvent = (e) => this.replay?.gloo(this.time, e);
     }
 
+    this.miniBase = this.world.paintMap(this.mode === 'train' ? 256 : 512);
+
     this.hud.banner(
-      this.mode === 'br' ? 'SALTA!' : this.mode === 'squad' ? 'CONTRA SQUAD' : 'TREINO',
-      this.mode === 'br' ? 'Guia a queda e aterra perto de loot' : this.mode === 'squad' ? 'Primeira equipa a 25 abates vence' : 'Alvos móveis · munição infinita',
+      this.mode === 'br' ? 'EMBARQUE!' : this.mode === 'squad' ? 'CONTRA SQUAD' : watch ? 'MODO OBSERVADOR' : 'TREINO',
+      this.mode === 'br' ? 'Salta do avião quando quiseres' : this.mode === 'squad' ? `${this.arena?.name} · primeira equipa a 25 abates` : watch ? '48 jogadores · câmaras de transmissão' : 'Prédio, armazém, gelo e alvos móveis',
       3,
     );
-    if (this.mode === 'br') this.toast('PARAQUEDAS: ESPAÇO / SALTAR');
     this.onResize();
   }
 
   // =============================================================== setup helpers
+  inPlane(a: Actor) {
+    return this.onPlane.has(a);
+  }
+
+  private planBotDrop(a: Actor) {
+    const pl = this.plane!;
+    const land = this.world.pois.filter((p) => p.kind !== 'range');
+    let tx: number, tz: number;
+    if (Math.random() < 0.8 && land.length) {
+      const weights = land.map((p) => {
+        const k = pl.progressNear(p.x, p.z);
+        const pp = pl.pointAt(k, tA);
+        return 1 / (1 + Math.hypot(pp.x - p.x, pp.z - p.z) / 60);
+      });
+      let r = Math.random() * weights.reduce((s, x) => s + x, 0);
+      let i = 0;
+      while (r > weights[i] && i < weights.length - 1) r -= weights[i++];
+      const p = land[i];
+      const ang = Math.random() * 6.28, rr = Math.random() * p.r;
+      tx = p.x + Math.cos(ang) * rr;
+      tz = p.z + Math.sin(ang) * rr;
+    } else {
+      const k = 0.15 + Math.random() * 0.7;
+      const pp = pl.pointAt(k, tA);
+      tx = pp.x + (Math.random() - 0.5) * 120;
+      tz = pp.z + (Math.random() - 0.5) * 120;
+    }
+    const d = Math.hypot(tx, tz);
+    if (d > this.world.radius - 25) {
+      tx *= (this.world.radius - 25) / d;
+      tz *= (this.world.radius - 25) / d;
+    }
+    this.landAt.set(a, new THREE.Vector3(tx, 0, tz));
+    this.jumpAt.set(a, THREE.MathUtils.clamp(pl.progressNear(tx, tz) + (Math.random() - 0.5) * 0.08, 0.1, 0.9));
+  }
+
+  private jump(a: Actor) {
+    if (!this.onPlane.has(a)) return;
+    this.onPlane.delete(a);
+    const pl = this.plane!;
+    a.pos.copy(pl.pos).add(tA.set((Math.random() - 0.5) * 4, -4, (Math.random() - 0.5) * 4));
+    a.vel.copy(pl.dir).multiplyScalar(8);
+    a.yaw = Math.atan2(pl.dir.x, pl.dir.z);
+    a.dropping = true;
+    a.glide = false;
+    a.onGround = false;
+    a.rig.root.visible = true;
+    a.rig.root.position.copy(a.pos);
+    if (a.isPlayer) {
+      sfx.click();
+      this.toast('PARAQUEDAS: SALTAR / ESPAÇO');
+    }
+  }
+
+  private setupArena() {
+    const names = this.world.def.arenas;
+    const poi = this.world.pois.find((p) => p.name === pick(names)) || this.world.pois[0];
+    this.arena = poi;
+    this.world.cx = poi.x;
+    this.world.cz = poi.z;
+    this.world.clampR = ARENA_R;
+    const ang = Math.random() * Math.PI * 2;
+    for (const [list, s] of [[this.world.spawnsA, 1], [this.world.spawnsB, -1]] as const) {
+      for (let i = 0; i < 4; i++) {
+        const off = (i - 1.5) * 4;
+        const x = poi.x + Math.cos(ang) * 45 * s - Math.sin(ang) * off, z = poi.z + Math.sin(ang) * 45 * s + Math.cos(ang) * off;
+        list.push(new THREE.Vector3(x, 0, z));
+      }
+    }
+    this.zoneWall = new THREE.Mesh(
+      new THREE.CylinderGeometry(1, 1, 60, 48, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xff4a6a, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false, fog: false }),
+    );
+    this.zoneWall.position.set(poi.x, 20, poi.z);
+    this.zoneWall.scale.set(ARENA_R, 1, ARENA_R);
+    this.scene.add(this.zoneWall);
+    this.zone.cx = poi.x;
+    this.zone.cz = poi.z;
+    this.zone.r = ARENA_R;
+  }
+
   private respawn(a: Actor, initial = false) {
     let sp: THREE.Vector3;
     if (this.mode === 'squad') sp = pick(a.team === 0 ? this.world.spawnsA : this.world.spawnsB);
     else if (a.ai?.passive) sp = a.ai.home;
     else sp = this.world.spawnsA[0];
     a.pos.set(sp.x + (Math.random() - 0.5) * 3, 0, sp.z + (Math.random() - 0.5) * 3);
+    a.pos.y = this.world.groundAt(a.pos.x, a.pos.z, 60);
     a.pos.y = this.world.resolve(a.pos, RADIUS, 1.8);
     a.vel.set(0, 0, 0);
     a.hp = 100;
     a.alive = true;
-    a.yaw = this.mode === 'squad' ? (a.team === 0 ? Math.PI / 2 : -Math.PI / 2) : Math.PI;
+    if (this.mode === 'squad' && this.arena) a.yaw = Math.atan2(this.arena.x - a.pos.x, this.arena.z - a.pos.z);
+    else a.yaw = Math.PI;
     a.rig.root.rotation.x = 0;
     a.rig.root.visible = true;
     a.reloadT = 0;
@@ -286,13 +393,14 @@ export class Match {
 
   private spawnLoot() {
     const spots = [...this.world.loot];
-    for (let i = 0; i < 40; i++) {
-      const ang = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (this.world.radius - 8);
-      spots.push(new THREE.Vector3(Math.cos(ang) * r, 0, Math.sin(ang) * r));
+    for (let i = 0; i < 150; i++) {
+      const ang = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (this.world.radius - 15);
+      const x = Math.cos(ang) * r, z = Math.sin(ang) * r;
+      if (this.world.heightAt(x, z) > 1) spots.push(new THREE.Vector3(x, 0, z));
     }
     const wTable: WeaponId[] = ['smg', 'smg', 'ar', 'ar', 'ar', 'sg', 'sg', 'dmr', 'sr', 'lmg', 'smg', 'ar'];
     for (const s of spots) {
-      if (Math.random() < 0.15) continue;
+      if (Math.random() < 0.18) continue;
       const roll = Math.random();
       const p = s.clone();
       p.y = this.world.groundAt(p.x, p.z, p.y + 1);
@@ -318,32 +426,27 @@ export class Match {
       const m = new THREE.Group();
       if (kind === 'med') {
         m.add(new THREE.Mesh(box(0.42, 0.3, 0.3), mat(0xf5f5f5)));
-        const c1 = new THREE.Mesh(box(0.2, 0.06, 0.31), mat(0xe5383b));
-        const c2 = new THREE.Mesh(box(0.06, 0.2, 0.31), mat(0xe5383b));
-        m.add(c1, c2);
+        m.add(new THREE.Mesh(box(0.2, 0.06, 0.31), mat(0xe5383b)), new THREE.Mesh(box(0.06, 0.2, 0.31), mat(0xe5383b)));
         ring = 0x2bd97c;
       } else if (kind === 'armor') {
         const col = [0, 0x6c8ca8, 0x8e5bd6, 0xe0a92e][n];
-        m.add(new THREE.Mesh(box(0.45, 0.5, 0.18), mat(col)));
-        m.add(new THREE.Mesh(box(0.3, 0.12, 0.2), mat(0x222222)));
+        m.add(new THREE.Mesh(box(0.45, 0.5, 0.18), mat(col)), new THREE.Mesh(box(0.3, 0.12, 0.2), mat(0x222222)));
         ring = col;
       } else if (kind === 'gel') {
-        m.add(new THREE.Mesh(cyl(0.15, 0.15, 0.4, 8), mat(0x8fe3ff)));
-        m.add(new THREE.Mesh(cyl(0.16, 0.16, 0.06, 8), mat(0x2b6f8a)));
+        m.add(new THREE.Mesh(cyl(0.15, 0.15, 0.4, 8), mat(0x8fe3ff)), new THREE.Mesh(cyl(0.16, 0.16, 0.06, 8), mat(0x2b6f8a)));
         ring = 0x8fe3ff;
       } else {
-        const s = new THREE.Mesh(sphere(0.15, 8, 6), mat(0x5c8a3a));
-        m.add(s);
-        m.add(new THREE.Mesh(box(0.08, 0.1, 0.08), mat(0x333333)).translateY(0.15));
+        m.add(new THREE.Mesh(sphere(0.15, 8, 6), mat(0x5c8a3a)), new THREE.Mesh(box(0.08, 0.1, 0.08), mat(0x333333)).translateY(0.15));
         ring = 0xa3d977;
       }
       m.position.y = 0.4;
       g.add(m);
     }
-    const r = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.6, 20).rotateX(-Math.PI / 2), glow(ring));
+    const r = new THREE.Mesh(ringGeo, glow(ring));
     r.position.y = 0.04;
     g.add(r);
     g.position.copy(pos);
+    g.visible = false;
     this.scene.add(g);
     this.loot.push({ kind, wid, n, obj: g, pos: pos.clone(), alive: true, spin: Math.random() * 6 });
   }
@@ -351,22 +454,18 @@ export class Match {
   private removeLoot(l: Loot) {
     l.alive = false;
     this.scene.remove(l.obj);
-    l.obj.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh && m.geometry.type === 'RingGeometry') m.geometry.dispose();
-    });
   }
 
   private setupZone() {
     const z = this.zone;
-    z.r = z.nr = this.world.radius * 1.3;
+    z.r = z.nr = this.world.radius * 1.2;
     this.zoneWall = new THREE.Mesh(
-      new THREE.CylinderGeometry(1, 1, 90, 48, 1, true),
+      new THREE.CylinderGeometry(1, 1, 120, 56, 1, true),
       new THREE.MeshBasicMaterial({ color: 0x4a7dff, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false, fog: false }),
     );
-    this.zoneWall.position.y = 30;
-    this.zoneRing = new THREE.Mesh(new THREE.RingGeometry(0.985, 1, 72).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, fog: false }));
-    this.zoneRing.position.y = 0.15;
+    this.zoneWall.position.y = 40;
+    this.zoneRing = new THREE.Mesh(new THREE.RingGeometry(0.99, 1, 96).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, fog: false, depthTest: false }));
+    this.zoneRing.renderOrder = 5;
     this.scene.add(this.zoneWall, this.zoneRing);
     this.nextZone();
   }
@@ -380,10 +479,13 @@ export class Match {
     z.fcx = z.cx;
     z.fcz = z.cz;
     z.nr = ph.r;
-    const maxOff = z.phase === 0 ? this.world.radius - ph.r - 10 : z.r - ph.r;
-    const a = Math.random() * Math.PI * 2, d = Math.random() * Math.max(0, maxOff) * 0.8;
-    z.ncx = z.cx + Math.cos(a) * d;
-    z.ncz = z.cz + Math.sin(a) * d;
+    const maxOff = z.phase === 0 ? this.world.radius - ph.r - 15 : z.r - ph.r;
+    for (let tries = 0; tries < 20; tries++) {
+      const a = Math.random() * Math.PI * 2, d = Math.random() * Math.max(0, maxOff) * 0.85;
+      z.ncx = z.cx + Math.cos(a) * d;
+      z.ncz = z.cz + Math.sin(a) * d;
+      if (this.world.heightAt(z.ncx, z.ncz) > 1) break;
+    }
     z.t = 0;
     z.shrinking = false;
     z.dps = ph.dps;
@@ -395,6 +497,7 @@ export class Match {
     if (this.input.take('pause')) {
       if (!this.over) this.setPaused(!this.paused);
     }
+    if (this.input.take('map')) this.mapOpen = !this.mapOpen;
     this.fpsAcc += rawDt;
     this.fpsN++;
     if (this.fpsAcc > 0.5) {
@@ -406,20 +509,37 @@ export class Match {
       this.input.consumeLook();
       return;
     }
-    this.time += dt;
 
-    this.updatePlayer(dt);
+    if (this.replayOn) {
+      this.updateReplay(dt);
+      this.fx.update(dt);
+      this.spec?.update(dt);
+      this.world.updateVisibility(this.camera.position, this.far);
+      this.hud.update(dt);
+      this.drawMinimap();
+      return;
+    }
+
+    this.time += dt;
+    if (this.plane) this.updatePlane(dt);
+    if (!this.spec) this.updatePlayer(dt);
+    else this.input.take('jump');
     for (const a of this.actors) {
+      if (this.onPlane.has(a)) continue;
       if (!a.isPlayer) this.updateBot(a, dt);
       this.updateActor(a, dt);
     }
     this.updateLoot(dt);
-    this.updateGels(dt);
+    this.gloo.update(dt, this.camera.position);
     this.updateNades(dt);
-    if (this.mode === 'br') this.updateZone(dt);
+    if (this.mode === 'br' || this.mode === 'watch') this.updateZone(dt);
     this.fx.update(dt);
-    this.updateCamera(dt);
+    if (this.spec) this.spec.update(dt);
+    else this.updateCamera(dt);
+    this.world.updateVisibility(this.camera.position, (this.scene.fog as THREE.Fog).far);
+    this.world.clouds.position.x = Math.sin(this.time * 0.01) * 30;
     this.updateHud(dt);
+    this.replay?.record(dt, this.time, this.actors, this.plane && !this.plane.done ? this.plane.pos : null, (a) => this.onPlane.has(a));
 
     if (this.endT >= 0) {
       this.endT -= dt;
@@ -446,7 +566,7 @@ export class Match {
 
   quit() {
     this.setPaused(false);
-    this.finish({ ...this.makeResult(false), quit: true });
+    this.finish({ ...(this.result || this.makeResult(false)), quit: true });
   }
 
   private makeResult(win: boolean): MatchResult {
@@ -466,12 +586,17 @@ export class Match {
     };
   }
 
-  private endMatch(win: boolean) {
+  private endMatch(win: boolean, winner?: Actor) {
     if (this.over) return;
     this.over = true;
-    this.result = this.makeResult(win);
-    this.endT = win ? 2.5 : 2.2;
-    if (win) {
+    if (!this.result) this.result = this.makeResult(win);
+    if (winner) this.result.winner = winner.name;
+    this.endT = this.spec ? 5 : win ? 3 : 2.4;
+    if (this.spec || this.mode === 'watch') {
+      this.hud.banner('BOOYAH!', winner ? `CAMPEÃO: ${winner.name}` : 'Fim da partida', 4.5);
+      if (winner && this.spec) this.spec.target = winner;
+      sfx.booyah();
+    } else if (win) {
       sfx.booyah();
       this.hud.banner(this.mode === 'br' ? 'BOOYAH!' : 'VITÓRIA!', this.mode === 'br' ? 'Último sobrevivente' : `${this.scoreA} - ${this.scoreB}`, 3);
     } else {
@@ -481,6 +606,7 @@ export class Match {
   }
 
   private finish(r: MatchResult) {
+    if (!this.input.enabled) return;
     this.input.enabled = false;
     this.opts.onEnd(r);
   }
@@ -488,6 +614,143 @@ export class Match {
   private toast(msg: string) {
     this.hud.center(msg);
     this.toastT = 1.6;
+  }
+
+  // =============================================================== spectate & replay
+  enterSpectate(target: Actor | null) {
+    this.deathEl?.remove();
+    this.deathEl = null;
+    if (!this.spec) this.spec = new Spectator(this, target, 'follow');
+    else this.spec.target = target;
+  }
+
+  leaveSpectate() {
+    if (this.mode === 'watch') return this.quit();
+    this.finish(this.result || this.makeResult(false));
+  }
+
+  private showDeath(killer: Actor | null) {
+    const r = this.result!;
+    const el = document.createElement('div');
+    el.id = 'deathbox';
+    el.className = 'hud-ui';
+    el.innerHTML = `<div class="db"><span>ELIMINADO POR</span><b>${esc(killer ? killer.name : 'ZONA')}</b><em>#${r.rank} de ${r.total} · ${r.kills} abates</em>
+      <div class="dbtn"><button class="btn-ghost" data-d="replay">⟲ REPETIÇÃO</button><button class="btn-ghost" data-d="spec">◉ ESPECTAR</button><button class="btn-primary" data-d="exit">CONTINUAR</button></div></div>`;
+    el.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>('[data-d]');
+      if (!b) return;
+      sfx.click();
+      if (b.dataset.d === 'exit') this.finish(r);
+      else if (b.dataset.d === 'spec') this.enterSpectate(killer && killer.alive ? killer : null);
+      else {
+        this.enterSpectate(this.player);
+        this.startReplay(this.player, 0.5);
+      }
+    });
+    this.hud.el.appendChild(el);
+    this.deathEl = el;
+    document.exitPointerLock?.();
+  }
+
+  replayRange(): [number, number] {
+    return [this.replayA, this.replayB];
+  }
+
+  startReplay(focus: Actor | null, speed = 1) {
+    if (!this.replay || this.replay.newest - this.replay.oldest < 1) return;
+    if (!this.spec) this.enterSpectate(focus);
+    this.replayOn = true;
+    this.replayB = this.replay.newest;
+    this.replayA = Math.max(this.replay.oldest, this.replayB - 12);
+    this.replayT = this.replayPrev = this.replayA;
+    this.replaySpeed = speed;
+    this.replayPaused = false;
+    if (focus && this.spec) {
+      this.spec.target = focus;
+      if (this.spec.mode === 'auto') this.spec.setMode('follow');
+    }
+    this.hud.banner('REPETIÇÃO', 'Últimos segundos da partida', 1.4);
+  }
+
+  seekReplay(frac: number) {
+    this.replayT = this.replayA + (this.replayB - this.replayA) * THREE.MathUtils.clamp(frac, 0, 1);
+    this.replayPrev = this.replayT;
+  }
+
+  stopReplay() {
+    if (!this.replayOn) return;
+    this.replayOn = false;
+    this.gloo.showReplay(null);
+    for (const a of this.actors) {
+      a.rig.root.visible = !this.onPlane.has(a) && (a.alive || a.deathT < 4 || this.mode === 'squad');
+      a.rig.root.position.copy(a.pos);
+      a.rig.root.rotation.y = a.yaw;
+    }
+    if (this.plane) {
+      this.plane.group.visible = !this.plane.done;
+      this.plane.group.position.copy(this.plane.pos);
+    }
+  }
+
+  private updateReplay(dt: number) {
+    const r = this.replay!;
+    if (!this.replayPaused) this.replayT += dt * this.replaySpeed;
+    if (this.replayT >= this.replayB) {
+      this.stopReplay();
+      return;
+    }
+    const t = this.replayT;
+    const sdt = this.replayPaused ? 0 : dt * this.replaySpeed;
+    const s = this.snap;
+    this.actors.forEach((a, i) => {
+      r.sample(t, i, s);
+      const rig = a.rig;
+      const inPl = (s.flags & FL.plane) !== 0;
+      const alive = (s.flags & FL.alive) !== 0;
+      rig.root.visible = !inPl;
+      if (inPl) return;
+      rig.root.position.set(s.x, s.y, s.z);
+      rig.root.rotation.y = s.yaw;
+      rig.root.rotation.x = alive ? 0 : -Math.PI / 2;
+      const dropping = (s.flags & FL.dropping) !== 0;
+      rig.setChute(dropping && (s.flags & FL.glide) !== 0);
+      if (s.weapon !== rig.weaponId) {
+        const slot = a.slots.find((x) => x?.id === s.weapon);
+        rig.setWeapon(s.weapon, slot?.skin || 'default');
+      }
+      if (alive && rig.root.position.distanceTo(this.camera.position) < this.far)
+        rig.update(sdt, { speed: s.speed, crouch: (s.flags & FL.crouch) !== 0, air: (s.flags & FL.ground) === 0, pitch: s.pitch, reload: 0, glide: dropping, dead: false }, this.world.heightAt(s.x, s.z));
+    });
+    if (this.plane) {
+      const pp = r.planeAt(t);
+      this.plane.group.visible = !!pp;
+      if (pp) this.plane.group.position.set(pp[0], pp[1], pp[2]);
+    }
+    const from = this.replayPrev;
+    if (t > from) {
+      for (const e of r.shots) if (e.t > from && e.t <= t) this.fx.tracer(tA.set(...e.a), tB.set(...e.b), e.color);
+      for (const e of r.booms) if (e.t > from && e.t <= t) this.fx.blast(tA.set(...e.p), 4.5);
+      for (const e of r.kills)
+        if (e.t > from && e.t <= t) {
+          const [k, w, v] = e.text.split('|');
+          this.hud.kill(k, v, w, false, false, 0);
+        }
+    }
+    this.replayPrev = t;
+    this.gloo.showReplay(r.glooAt(t));
+  }
+
+  // =============================================================== plane
+  private updatePlane(dt: number) {
+    const pl = this.plane!;
+    if (pl.done) return;
+    const k = pl.update(dt);
+    for (const a of [...this.onPlane]) {
+      a.pos.copy(pl.pos);
+      if (!a.isPlayer && k >= (this.jumpAt.get(a) ?? 0.5)) this.jump(a);
+    }
+    if (k > 0.96) for (const a of [...this.onPlane]) this.jump(a);
+    if (pl.done) pl.group.visible = false;
   }
 
   // =============================================================== player
@@ -503,11 +766,15 @@ export class Match {
     const [lx, ly] = inp.consumeLook();
     const w = p.weapon;
     const def = w ? WEAPONS[w.id] : null;
-    const ads = inp.ads && !!def && !p.dropping && p.alive;
+    const ads = inp.ads && !!def && !p.dropping && p.alive && !this.onPlane.has(p);
     const sens = (0.0009 + profile.settings.sens * 0.00042) * (ads && def ? def.adsFov / 72 : 1);
     if (p.alive) {
       p.yaw -= lx * sens;
       p.pitch = THREE.MathUtils.clamp(p.pitch - ly * sens, -1.25, 1.15);
+    }
+    if (this.onPlane.has(p)) {
+      if (inp.take('jump') || inp.take('pickup')) this.jump(p);
+      return;
     }
     if (!p.alive || this.over) {
       p.vel.x *= 0.9;
@@ -515,17 +782,14 @@ export class Match {
       return;
     }
 
-    // aim assist / magnetism
     this.assist = this.findAssist();
     if (this.assist && inp.fire && profile.settings.aimAssist > 0) {
       const t = this.assist.head ? this.assist.a.headPos(tA) : this.assist.a.chestPos(tA);
       tB.copy(this.camera.position);
       const dx = t.x - tB.x, dy = t.y - tB.y, dz = t.z - tB.z;
-      const wantYaw = Math.atan2(dx, dz);
-      const wantPitch = Math.atan2(dy, Math.hypot(dx, dz));
       const k = Math.min(1, dt * (2 + profile.settings.aimAssist * 2.2));
-      p.yaw += angDiff(wantYaw, p.yaw) * k;
-      p.pitch += (wantPitch - p.pitch) * k * 0.7;
+      p.yaw += angDiff(Math.atan2(dx, dz), p.yaw) * k;
+      p.pitch += (Math.atan2(dy, Math.hypot(dx, dz)) - p.pitch) * k * 0.7;
     }
 
     const fx = Math.sin(p.yaw), fz = Math.cos(p.yaw);
@@ -534,12 +798,11 @@ export class Match {
     const wz = fz * inp.my + rz * inp.mx;
 
     if (p.dropping) {
-      if (inp.take('jump') && !p.glide && p.pos.y - p.ground < 100) this.openChute(p);
+      if (inp.take('jump') && !p.glide) this.openChute(p);
       if (!p.glide && p.pos.y - p.ground < 38) this.openChute(p);
       const hs = p.glide ? 9 : 17;
       p.vel.x += (wx * hs - p.vel.x) * Math.min(1, dt * 3);
       p.vel.z += (wz * hs - p.vel.z) * Math.min(1, dt * 3);
-      p.vel.y = p.glide ? -6.5 : -28;
       return;
     }
 
@@ -556,13 +819,13 @@ export class Match {
     if (ads) speed *= 0.65;
     if (p.furyT > 0) speed *= 1.2;
     if (p.healT > 0) speed *= 0.4;
+    if (p.pos.y < -0.4) speed *= 0.6;
     if (p.dashT <= 0) {
       const acc = p.onGround ? 16 : 5;
       p.vel.x += (wx * speed - p.vel.x) * Math.min(1, dt * acc);
       p.vel.z += (wz * speed - p.vel.z) * Math.min(1, dt * acc);
     }
 
-    // weapon actions
     for (let i = 0; i < 3; i++) if (inp.take(`slot${i}` as 'slot0')) this.switchTo(p, i);
     if (inp.take('swap')) {
       for (let k = 1; k <= 3; k++) {
@@ -574,7 +837,7 @@ export class Match {
       }
     }
     if (inp.take('reload')) this.startReload(p);
-    if (inp.take('gel')) this.placeGel(p);
+    if (inp.take('gel')) this.throwGloo(p, p.yaw);
     if (inp.take('nade')) this.throwNade(p, this.camFwd(tA));
     if (inp.take('heal')) this.startHeal(p);
     if (inp.take('ability')) this.useAbility(p);
@@ -585,13 +848,13 @@ export class Match {
       this.playerShoot(ads);
     } else this.semiLatch = false;
 
-    // nearby loot
     let near: Loot | null = null;
     let nd = 2.0;
     for (const l of this.loot) {
       if (!l.alive) continue;
-      const d = Math.hypot(l.pos.x - p.pos.x, l.pos.z - p.pos.z);
-      if (d > 2 || Math.abs(l.pos.y - p.pos.y) > 1.6) continue;
+      const dx = l.pos.x - p.pos.x, dz = l.pos.z - p.pos.z;
+      if (Math.abs(dx) > 2 || Math.abs(dz) > 2 || Math.abs(l.pos.y - p.pos.y) > 1.6) continue;
+      const d = Math.hypot(dx, dz);
       if (l.kind !== 'weapon') {
         if (d < 1.5) this.takeItem(p, l);
         continue;
@@ -624,7 +887,7 @@ export class Match {
     let head = false;
     const range = WEAPONS[w.id].range;
     for (const e of this.actors) {
-      if (!e.alive || e.team === p.team || e.dropping) continue;
+      if (!e.alive || e.team === p.team || e.dropping || this.onPlane.has(e)) continue;
       const d = e.pos.distanceTo(p.pos);
       if (d > range) continue;
       e.chestPos(tA).sub(cam);
@@ -633,8 +896,7 @@ export class Match {
       const allowed = cone * (1 + 4 / Math.max(2, d));
       if (ang > allowed || ang > bestA * (1 + 4 / Math.max(2, d))) continue;
       tA.divideScalar(len);
-      const t = this.world.raycast(cam, tA, len);
-      if (t < len - 0.4) continue;
+      if (this.world.raycast(cam, tA, len) < len - 0.4) continue;
       best = e;
       bestA = ang;
       e.headPos(tB).sub(cam).normalize();
@@ -703,7 +965,7 @@ export class Match {
     let victim: Actor | null = null;
     let head = false;
     for (const e of this.actors) {
-      if (!e.alive || e.team === s.team || e.dropping) continue;
+      if (!e.alive || e.team === s.team || e.dropping || this.onPlane.has(e)) continue;
       tA.copy(e.pos).sub(o);
       const along = tA.dot(d);
       if (along < t0 || along > best + 1) continue;
@@ -716,15 +978,17 @@ export class Match {
       }
     }
     const hit = tC.copy(o).addScaledVector(d, Math.min(best, maxT));
-    if (tracer) this.fx.tracer(muzzle, hit, s.isPlayer ? 0xffe28a : 0xff9a6b);
+    if (tracer) {
+      this.fx.tracer(muzzle, hit, 0xffe28a);
+      this.replay?.shot(this.time, muzzle, hit, 0xffe28a);
+    }
     if (victim) {
       const dist = s.pos.distanceTo(victim.pos);
       const fall = dist > def.range * 0.5 ? THREE.MathUtils.lerp(1, 0.55, Math.min(1, (dist - def.range * 0.5) / (def.range * 0.5))) : 1;
-      const dmg = def.dmg * (head ? def.head : 1) * fall * (s.furyT > 0 ? 1.1 : 1);
-      this.hurt(victim, dmg, s, head, def.name);
+      this.hurt(victim, def.dmg * (head ? def.head : 1) * fall * (s.furyT > 0 ? 1.1 : 1), s, head, def.name);
       this.fx.burst(hit, head ? 0xffd34d : 0xff3b3b, 5, 3, 0.07);
     } else if (best < maxT) {
-      if (wall && best === tw) this.damageWall(wall, def.dmg);
+      if (wall && best === tw) this.gloo.damage(wall, def.dmg);
       this.fx.burst(hit, wall && best === tw ? 0xbff3ff : 0xd8c8a8, 3, 2.5, 0.06);
     }
   }
@@ -791,38 +1055,18 @@ export class Match {
     }
   }
 
-  private placeGel(a: Actor, yawOverride?: number) {
-    if (a.gel <= 0 || a.dropping || !a.alive) return;
-    const yaw = yawOverride ?? a.yaw;
-    const x = a.pos.x + Math.sin(yaw) * 1.7, z = a.pos.z + Math.cos(yaw) * 1.7;
-    const gy = this.world.groundAt(x, z, a.pos.y + 0.6);
-    const wall = this.world.addWall(x, gy, z, yaw, 1.8, 0.22, 2.5, 260);
-    const mesh = new THREE.Mesh(this.gelGeo, this.gelMat);
-    mesh.position.set(x, gy, z);
-    mesh.rotation.y = yaw;
-    mesh.scale.y = 0.05;
-    this.scene.add(mesh);
-    this.gels.push({ wall, mesh, life: 25, grow: 0 });
+  private throwGloo(a: Actor, yaw: number) {
+    if (a.gel <= 0 || a.dropping || !a.alive || a.glooCd > 0) return;
     a.gel--;
-    const d = a.pos.distanceTo(this.camera.position);
-    if (d < 50) sfx.gel();
-    this.fx.burst(tA.set(x, gy + 0.3, z), 0xbff3ff, 10, 3, 0.12, 8, 0.5);
-  }
-
-  private damageWall(w: Wall, dmg: number) {
-    w.hp -= dmg;
-    if (w.hp <= 0) {
-      const g = this.gels.find((x) => x.wall === w);
-      if (g) this.breakGel(g);
-    }
-  }
-
-  private breakGel(g: Gel) {
-    this.world.removeWall(g.wall);
-    this.scene.remove(g.mesh);
-    this.gels.splice(this.gels.indexOf(g), 1);
-    this.fx.burst(tA.set(g.wall.x, g.wall.y0 + 1.2, g.wall.z), 0xbff3ff, 22, 5, 0.16, 12, 0.7);
-    if (g.mesh.position.distanceTo(this.camera.position) < 40) sfx.gelBreak();
+    a.glooCd = 0.45;
+    const skin = a.isPlayer ? profile.gloo || 'classic' : a.id % 5 === 0 ? pick(['lava', 'rose', 'toxic', 'galaxy', 'gold']) : 'classic';
+    const from = new THREE.Vector3(a.pos.x + Math.sin(yaw) * 0.4, a.pos.y + 1.3, a.pos.z + Math.cos(yaw) * 0.4);
+    const dir = tB.set(Math.sin(yaw), 0, Math.cos(yaw));
+    if (this.world.raycast(tC.set(a.pos.x, a.pos.y + 0.8, a.pos.z), dir, 2.2) < 2.2) {
+      const x = a.pos.x + Math.sin(yaw) * 1.2, z = a.pos.z + Math.cos(yaw) * 1.2;
+      this.gloo.place(x, z, this.world.groundAt(x, z, a.pos.y + 0.6), yaw, skin, a.team);
+    } else this.gloo.throw(from, yaw, skin, a.team);
+    if (a.isPlayer) sfx.click();
   }
 
   private throwNade(a: Actor, dir: THREE.Vector3, power = 17) {
@@ -844,7 +1088,7 @@ export class Match {
       took = `+${l.n} KIT MÉDICO`;
     } else if (l.kind === 'gel' && a.gel < 10) {
       a.gel = Math.min(10, a.gel + l.n);
-      took = `+${l.n} PAREDE DE GEL`;
+      took = `+${l.n} GELO`;
     } else if (l.kind === 'nade' && a.nades < 4) {
       a.nades = Math.min(4, a.nades + l.n);
       took = `+${l.n} GRANADA`;
@@ -891,8 +1135,10 @@ export class Match {
     let d = dmg * (1 - ARMOR_RED[v.armor]);
     if (v.shieldT > 0) d *= 0.45;
     v.hp -= d;
+    v.heat = Math.min(5, v.heat + 0.6);
     if (by) {
       by.damage += d;
+      by.heat = Math.min(5, by.heat + 0.5);
       v.lastAttacker = by;
     }
     if (v.isPlayer) {
@@ -913,7 +1159,7 @@ export class Match {
       }
     }
     const killed = v.hp <= 0;
-    if (by?.isPlayer) {
+    if (by?.isPlayer && !this.spec) {
       sfx.hit(head);
       this.hud.hit(head, killed);
       const s = this.project(v.headPos(tA).setY(tA.y + 0.3));
@@ -930,10 +1176,14 @@ export class Match {
     v.reloadT = 0;
     v.crouch = false;
     v.shieldT = v.furyT = v.hotT = 0;
-    if (by && by !== v) by.kills++;
+    if (by && by !== v) {
+      by.kills++;
+      by.heat = 5;
+    }
     const p = this.player;
     const allyRel = v.team === p.team ? -1 : by && by.team === p.team ? 1 : 0;
     this.hud.kill(by ? by.name : 'ZONA', v.name, label, head, v.isPlayer || !!by?.isPlayer, this.mode === 'squad' ? allyRel : 0);
+    this.replay?.kill(this.time, `${by ? by.name : 'ZONA'}|${label}|${v.name}`);
     this.fx.burst(v.chestPos(tA), 0xff3b3b, 14, 4, 0.1);
     if (by?.isPlayer && v !== by) {
       sfx.kill();
@@ -943,7 +1193,7 @@ export class Match {
       this.hud.banner(labels[Math.min(5, this.streak)], `${v.name}${head ? ' · TIRO NA CABEÇA' : ''}`, 1.4);
     }
 
-    if (this.mode === 'br') {
+    if (this.mode === 'br' || this.mode === 'watch') {
       for (let i = 0; i < 2; i++) {
         const s = v.slots[i];
         if (s) this.addLoot('weapon', tA.copy(v.pos).add(tB.set(Math.random() - 0.5, 0, Math.random() - 0.5)).clone(), 1, s.id);
@@ -952,9 +1202,15 @@ export class Match {
       if (v.gel > 0) this.addLoot('gel', tA.copy(v.pos).add(tB.set(-0.7, 0, 0.6)).clone(), Math.min(5, v.gel));
       if (v.armor > 0) this.addLoot('armor', tA.copy(v.pos).add(tB.set(0.2, 0, -0.9)).clone(), v.armor);
       const alive = this.actors.filter((a) => a.alive);
-      if (v.isPlayer) this.endMatch(false);
-      else if (alive.length === 1 && alive[0].isPlayer) this.endMatch(true);
-      else this.toast(`${alive.length} VIVOS`);
+      if (v.isPlayer && this.mode === 'br') {
+        this.result = this.makeResult(false);
+        this.hud.banner('ELIMINADO', `#${this.result.rank} de ${this.total}`, 2);
+        setTimeout(() => {
+          if (!this.over && !this.spec && this.input.enabled) this.showDeath(by);
+        }, 1200);
+      }
+      if (alive.length <= 1) this.endMatch(!!alive[0]?.isPlayer, alive[0]);
+      else if (!this.spec && p.alive) this.toast(`${alive.length} VIVOS`);
     } else if (this.mode === 'squad') {
       if (by && by !== v) {
         if (by.team === 0) this.scoreA++;
@@ -971,10 +1227,11 @@ export class Match {
   // =============================================================== physics & rig
   private updateActor(a: Actor, dt: number) {
     const rig = a.rig;
+    a.heat = Math.max(0, a.heat - dt * 0.35);
     if (!a.alive) {
       a.deathT += dt;
       rig.root.rotation.x = Math.max(-Math.PI / 2, -a.deathT * 5);
-      if (this.mode === 'br' && a.deathT > 4) rig.root.visible = false;
+      if (this.mode !== 'squad' && this.mode !== 'train' && a.deathT > 4) rig.root.visible = false;
       if (a.respawnT > 0 && !this.over) {
         a.respawnT -= dt;
         if (a.respawnT <= 0) this.respawn(a);
@@ -995,6 +1252,7 @@ export class Match {
     a.revealT = Math.max(0, a.revealT - dt);
     a.furyT = Math.max(0, a.furyT - dt);
     a.dashT = Math.max(0, a.dashT - dt);
+    a.glooCd = Math.max(0, a.glooCd - dt);
     if (a.shieldT > 0) a.shieldT -= dt;
     if (a.hotT > 0) {
       a.hotT -= dt;
@@ -1016,7 +1274,6 @@ export class Match {
       }
     }
 
-    // shield aura
     const wantAura = a.shieldT > 0;
     if (wantAura && !a.aura) {
       a.aura = new THREE.Mesh(this.auraGeo, this.auraMat);
@@ -1028,9 +1285,10 @@ export class Match {
     }
 
     a.vel.y -= GRAV * dt;
-    if (a.dropping) a.vel.y = a.glide ? -6.5 : Math.max(a.vel.y, -28);
+    if (a.dropping) a.vel.y = a.glide ? -6.5 : Math.max(a.vel.y, -30);
     a.pos.addScaledVector(a.vel, dt);
-    const g = this.world.resolve(a.pos, RADIUS, a.height);
+    const g = this.world.resolve(a.pos, RADIUS, a.height, a.vel.y);
+    if (this.world.ceil && a.vel.y > 0) a.vel.y = 0;
     a.ground = g;
     if (a.pos.y <= g + 0.001) {
       a.pos.y = g;
@@ -1041,7 +1299,7 @@ export class Match {
         a.glide = false;
         rig.setChute(false);
         a.vel.set(0, 0, 0);
-        if (a.isPlayer) this.hud.banner('ATERRASTE', 'Procura armas e equipamento', 1.8);
+        if (a.isPlayer && !this.spec) this.hud.banner('ATERRASTE', 'Procura armas e equipamento', 1.8);
       }
     } else if (a.onGround && a.vel.y <= 0 && a.pos.y - g < 0.5) {
       a.pos.y = g;
@@ -1059,9 +1317,12 @@ export class Match {
 
     rig.root.position.copy(a.pos);
     rig.root.rotation.y = a.yaw;
+    rig.root.rotation.x = 0;
+    if (a.weapon && rig.weaponId !== a.weapon.id) rig.setWeapon(a.weapon.id, a.weapon.skin);
+    if (!a.dropping && rig.chute) rig.setChute(false);
     const cam = this.camera.position;
     const dc = Math.abs(a.pos.x - cam.x) + Math.abs(a.pos.z - cam.z);
-    const visible = a.isPlayer || dc < (this.scene.fog as THREE.Fog).far * 1.2;
+    const visible = a.isPlayer || dc < this.far * 1.3;
     rig.root.visible = visible && !(a.isPlayer && this.scoped);
     if (visible) {
       const w = a.weapon;
@@ -1071,7 +1332,7 @@ export class Match {
         air: !a.onGround,
         pitch: a.pitch,
         reload: a.reloadT > 0 && w ? 1 - a.reloadT / WEAPONS[w.id].reload : 0,
-        glide: a.glide || (a.dropping && !a.glide),
+        glide: a.dropping,
         dead: false,
       }, g);
     }
@@ -1091,9 +1352,16 @@ export class Match {
     if (!b.alive || this.over) return;
 
     if (b.dropping) {
-      if (!b.glide && b.pos.y - b.ground < 30 + Math.random() * 10) this.openChute(b);
-      b.vel.x *= 0.98;
-      b.vel.z *= 0.98;
+      if (!b.glide && b.pos.y - b.ground < 32 + (b.id % 7)) this.openChute(b);
+      const land = this.landAt.get(b);
+      if (land) {
+        const dx = land.x - b.pos.x, dz = land.z - b.pos.z;
+        const d = Math.hypot(dx, dz) || 1;
+        const hs = Math.min(b.glide ? 9 : 17, d * 0.8);
+        b.vel.x += ((dx / d) * hs - b.vel.x) * Math.min(1, dt * 2);
+        b.vel.z += ((dz / d) * hs - b.vel.z) * Math.min(1, dt * 2);
+        b.yaw = Math.atan2(dx, dz);
+      }
       return;
     }
 
@@ -1116,11 +1384,11 @@ export class Match {
     }
 
     if (ai.think <= 0) {
-      ai.think = 0.22 + Math.random() * 0.12;
+      const far = b.pos.distanceTo(this.camera.position) > 150;
+      ai.think = (far ? 0.55 : 0.22) + Math.random() * 0.12;
       this.botThink(b);
     }
 
-    // ---- movement
     let mx = 0, mz = 0;
     const t = ai.target;
     const w = b.weapon;
@@ -1168,7 +1436,6 @@ export class Match {
       if (b.hp < 70 && b.meds > 0) this.startHeal(b);
     }
 
-    // ---- obstacle steering
     if (mx || mz) {
       if (ai.detourT > 0) {
         const c = Math.cos(ai.detour), s = Math.sin(ai.detour);
@@ -1206,7 +1473,7 @@ export class Match {
       }
     }
 
-    let speed = SPEED * (def ? def.moveMul : 1) * (b.crouch ? 0.45 : 1) * (b.healT > 0 ? 0.3 : 1) * (b.furyT > 0 ? 1.2 : 1) * (ai.visible ? 0.8 : 0.92);
+    let speed = SPEED * (def ? def.moveMul : 1) * (b.crouch ? 0.45 : 1) * (b.healT > 0 ? 0.3 : 1) * (b.furyT > 0 ? 1.2 : 1) * (ai.visible ? 0.8 : 0.92) * (b.pos.y < -0.4 ? 0.6 : 1);
     const ml = Math.hypot(mx, mz);
     if (ml > 1) speed /= ml;
     if (b.dashT <= 0) {
@@ -1222,14 +1489,16 @@ export class Match {
   private botThink(b: Actor) {
     const ai = b.ai!;
     const cfg = DIFF[this.diff];
-    const detect = (this.mode === 'br' ? 48 : 75) * cfg.detect;
-    // pick target
+    const br = this.mode === 'br' || this.mode === 'watch';
+    const detect = (br ? 48 : 75) * cfg.detect;
     const cands: [number, Actor][] = [];
     for (const e of this.actors) {
-      if (!e.alive || e.team === b.team || e.dropping || e === b) continue;
-      const d = Math.hypot(e.pos.x - b.pos.x, e.pos.z - b.pos.z) * (e.isPlayer || this.mode !== 'br' ? 1 : 1.5);
+      if (!e.alive || e.team === b.team || e.dropping || e === b || this.onPlane.has(e)) continue;
+      const dx = e.pos.x - b.pos.x, dz = e.pos.z - b.pos.z;
+      if (Math.abs(dx) > detect * 1.6 || Math.abs(dz) > detect * 1.6) continue;
+      const d = Math.hypot(dx, dz) * (e.isPlayer || !br ? 1 : 1.35);
       if (d > detect && !(e.firedT > 0 && d < detect * 1.4)) continue;
-      const ang = Math.abs(angDiff(Math.atan2(e.pos.x - b.pos.x, e.pos.z - b.pos.z), b.yaw));
+      const ang = Math.abs(angDiff(Math.atan2(dx, dz), b.yaw));
       if (ang > 1.4 && d > 10 && e.firedT <= 0 && e !== ai.target) continue;
       cands.push([d, e]);
     }
@@ -1243,18 +1512,17 @@ export class Match {
         ai.visible = true;
         ai.lastSeen.copy(e.pos);
         ai.seenT = 2.5;
-        if (e !== prev) ai.react = cfg.react * (0.7 + Math.random() * 0.6) / ai.skill;
+        if (e !== prev) ai.react = (cfg.react * (0.7 + Math.random() * 0.6)) / ai.skill;
         break;
       }
     }
     if (!ai.visible && ai.target && (!ai.target.alive || ai.seenT <= 0)) ai.target = null;
 
-    // tactics
     const t = ai.target;
     if (t && ai.visible) {
       const d = b.pos.distanceTo(t.pos);
-      if (b.hp < 45 && b.gel > 0 && ai.gelT <= 0 && Math.random() < 0.55) {
-        this.placeGel(b, Math.atan2(t.pos.x - b.pos.x, t.pos.z - b.pos.z));
+      if (b.hp < 50 && b.gel > 0 && ai.gelT <= 0 && Math.random() < 0.55) {
+        this.throwGloo(b, Math.atan2(t.pos.x - b.pos.x, t.pos.z - b.pos.z));
         ai.gelT = 6;
         if (b.meds > 0) this.startHeal(b);
       }
@@ -1267,7 +1535,6 @@ export class Match {
         const id = b.hero.ability.id;
         if ((id === 'heal' && b.hp < 60) || (id === 'shield' && b.hp < 75) || (id === 'fury' && d < 30) || (id === 'dash' && d > 15) || id === 'reveal') this.useAbility(b);
       }
-      // better weapon for the range
       const w = b.weapon;
       if (w && b.reloadT <= 0) {
         let bestI = b.cur, bestScore = -1e9;
@@ -1284,9 +1551,8 @@ export class Match {
       return;
     }
 
-    // non-combat goals
     if (!ai.goal || Math.random() < 0.02) {
-      if (this.mode === 'br') {
+      if (br) {
         const z = this.zone;
         const dz = Math.hypot(b.pos.x - z.ncx, b.pos.z - z.ncz);
         if (dz > z.nr * 0.8 || Math.hypot(b.pos.x - z.cx, b.pos.z - z.cz) > z.r * 0.9) {
@@ -1295,11 +1561,14 @@ export class Match {
         } else {
           const needW = !b.slots[0] || !b.slots[1];
           let best: Loot | null = null, bd = needW ? 60 : 35;
+          const myTier = Math.max(...b.slots.map((s) => (s ? WEAPONS[s.id].tier : 0)));
           for (const l of this.loot) {
             if (!l.alive) continue;
-            if (l.kind === 'weapon' && !needW && WEAPONS[l.wid!].tier <= Math.max(...b.slots.map((s) => (s ? WEAPONS[s.id].tier : 0)))) continue;
+            const dx = l.pos.x - b.pos.x, dz2 = l.pos.z - b.pos.z;
+            if (Math.abs(dx) > bd || Math.abs(dz2) > bd) continue;
+            if (l.kind === 'weapon' && !needW && WEAPONS[l.wid!].tier <= myTier) continue;
             if (l.kind === 'armor' && l.n <= b.armor) continue;
-            const d = l.pos.distanceTo(b.pos);
+            const d = Math.hypot(dx, dz2);
             if (d < bd && Math.hypot(l.pos.x - z.ncx, l.pos.z - z.ncz) < z.nr) {
               bd = d;
               best = l;
@@ -1313,17 +1582,20 @@ export class Match {
         }
       } else {
         const enemies = this.actors.filter((e) => e.alive && e.team !== b.team);
+        const cx = this.world.cx, cz = this.world.cz;
         if (enemies.length && Math.random() < 0.55) {
           const e = pick(enemies);
           ai.goal = new THREE.Vector3(e.pos.x + (Math.random() - 0.5) * 16, 0, e.pos.z + (Math.random() - 0.5) * 16);
-        } else ai.goal = new THREE.Vector3((Math.random() - 0.5) * 60, 0, (Math.random() - 0.5) * 50);
+        } else {
+          const a = Math.random() * 6.28, r = Math.random() * (this.world.clampR - 6);
+          ai.goal = new THREE.Vector3(cx + Math.cos(a) * r, 0, cz + Math.sin(a) * r);
+        }
       }
     }
 
-    // loot pickup in reach
-    if (this.mode === 'br') {
+    if (br) {
       for (const l of this.loot) {
-        if (!l.alive || l.pos.distanceTo(b.pos) > 1.8) continue;
+        if (!l.alive || Math.abs(l.pos.x - b.pos.x) > 1.8 || Math.abs(l.pos.z - b.pos.z) > 1.8 || Math.abs(l.pos.y - b.pos.y) > 1.8) continue;
         if (l.kind === 'weapon') {
           const worst = !b.slots[0] ? -1 : !b.slots[1] ? -1 : Math.min(WEAPONS[b.slots[0]!.id].tier, WEAPONS[b.slots[1]!.id].tier);
           if (worst < WEAPONS[l.wid!].tier && !b.slots.some((s) => s?.id === l.wid)) {
@@ -1371,20 +1643,20 @@ export class Match {
     const chest = t.chestPos(tC);
     let anyHit = false;
     for (let i = 0; i < def.pellets; i++) {
-      const hit = Math.random() < acc * (def.pellets > 1 ? 1.3 : 1);
-      if (hit) {
+      if (Math.random() < acc * (def.pellets > 1 ? 1.3 : 1)) {
         anyHit = true;
         const head = Math.random() < (this.diff === 'hard' ? 0.2 : 0.12);
         const fall = dist > def.range * 0.5 ? 0.7 : 1;
-        const botVsBot = t.isPlayer ? 1 : this.mode === 'br' ? 0.4 : 0.6;
+        const botVsBot = t.isPlayer ? 1 : this.mode === 'squad' ? 0.6 : 0.5;
         this.hurt(t, def.dmg * (head ? def.head : 1) * fall * cfg.dmg * botVsBot, b, head, def.name);
         if (!t.alive) break;
       }
     }
     const end = chest.clone();
     if (!anyHit) end.add(tA.set((Math.random() - 0.5) * 2.2, (Math.random() - 0.3) * 1.6, (Math.random() - 0.5) * 2.2));
-    this.fx.tracer(muzzle, end, 0xff9a6b);
     const dc = muzzle.distanceTo(this.camera.position);
+    if (dc < this.far) this.fx.tracer(muzzle, end, 0xff9a6b);
+    this.replay?.shot(this.time, muzzle, end, 0xff9a6b);
     if (dc < 60) {
       this.fx.flash(muzzle, tA.copy(end).sub(muzzle).normalize());
       sfx.shot(w.id, Math.max(0.05, 1 - dc / 60) * 0.55);
@@ -1397,7 +1669,7 @@ export class Match {
     const c = this.camera.position;
     for (const l of this.loot) {
       if (!l.alive) continue;
-      const near = Math.abs(l.pos.x - c.x) + Math.abs(l.pos.z - c.z) < 70;
+      const near = Math.abs(l.pos.x - c.x) + Math.abs(l.pos.z - c.z) < 60;
       l.obj.visible = near;
       if (!near) continue;
       l.spin += dt;
@@ -1405,19 +1677,7 @@ export class Match {
       inner.rotation.y = l.spin * 1.2;
       inner.position.y = (l.kind === 'weapon' ? 0.35 : 0.4) + Math.sin(l.spin * 2.4) * 0.08;
     }
-    if (this.loot.length > 220) this.loot = this.loot.filter((l) => l.alive);
-  }
-
-  private updateGels(dt: number) {
-    for (let i = this.gels.length - 1; i >= 0; i--) {
-      const g = this.gels[i];
-      g.life -= dt;
-      if (g.grow < 1) {
-        g.grow = Math.min(1, g.grow + dt * 7);
-        g.mesh.scale.y = 0.05 + g.grow * 0.95;
-      }
-      if (g.life <= 0) this.breakGel(g);
-    }
+    if (this.loot.length > 700) this.loot = this.loot.filter((l) => l.alive);
   }
 
   private updateNades(dt: number) {
@@ -1454,6 +1714,7 @@ export class Match {
   private explode(n: Nade) {
     const R = 6.5;
     this.fx.blast(n.pos, R * 0.7);
+    this.replay?.boom(this.time, n.pos);
     const dc = n.pos.distanceTo(this.camera.position);
     if (dc < 80) sfx.boom();
     if (dc < 20) this.shake = Math.max(this.shake, 1.2 * (1 - dc / 20));
@@ -1463,14 +1724,20 @@ export class Match {
       const d = a.chestPos(tB).distanceTo(n.pos);
       if (d < R) this.hurt(a, 105 * (1 - d / R) * (a === n.owner ? 0.5 : 1), n.owner, false, 'GRANADA');
     }
-    for (const g of [...this.gels]) if (Math.hypot(g.wall.x - n.pos.x, g.wall.z - n.pos.z) < R) this.damageWall(g.wall, 300);
+    for (const g of [...this.gloo.groups]) {
+      const w = g.segs.find((s) => s.wall)?.wall;
+      if (w && Math.hypot(g.x - n.pos.x, g.z - n.pos.z) < R) this.gloo.damage(w as Wall, 300);
+    }
   }
 
   private updateZone(dt: number) {
     const z = this.zone;
     const ph = ZONE_PHASES[z.phase];
-    const landed = this.time > 14;
-    if (ph && landed) {
+    if (!z.started && this.plane && this.plane.done) {
+      z.started = true;
+      z.t = -10;
+    }
+    if (ph && z.started) {
       z.t += dt;
       if (!z.shrinking && z.t >= ph.wait) {
         z.shrinking = true;
@@ -1486,7 +1753,7 @@ export class Match {
       }
     }
     for (const a of this.actors) {
-      if (!a.alive || a.dropping) continue;
+      if (!a.alive || a.dropping || this.onPlane.has(a)) continue;
       if (Math.hypot(a.pos.x - z.cx, a.pos.z - z.cz) > z.r) {
         a.hp -= z.dps * dt;
         if (a.isPlayer && Math.random() < dt * 2) this.hud.hurtDir(Math.PI);
@@ -1494,18 +1761,18 @@ export class Match {
       }
     }
     const r = Math.max(0.1, z.r);
-    this.zoneWall!.position.set(z.cx, 30, z.cz);
+    this.zoneWall!.position.set(z.cx, 40, z.cz);
     this.zoneWall!.scale.set(r, 1, r);
-    this.zoneRing!.position.set(z.ncx, 0.15, z.ncz);
+    this.zoneRing!.position.set(z.ncx, this.world.terrain.maxH + 0.5, z.ncz);
     this.zoneRing!.scale.set(Math.max(0.1, z.nr), 1, Math.max(0.1, z.nr));
-    this.zoneRing!.visible = !!ph && z.nr < z.r - 0.5;
+    this.zoneRing!.visible = !!ph && z.nr < z.r - 0.5 && this.camera.position.y > 40;
   }
 
   // =============================================================== camera & hud
   private get scoped() {
     const p = this.player;
     const w = p.weapon;
-    return !!w && WEAPONS[w.id].scope && this.input.ads && p.alive && !p.dropping;
+    return !!w && WEAPONS[w.id].scope && this.input.ads && p.alive && !p.dropping && !this.spec;
   }
 
   private updateCamera(dt: number) {
@@ -1518,8 +1785,19 @@ export class Match {
     const f = this.camFwd(tA);
     const rx = -Math.cos(p.yaw), rz = Math.sin(p.yaw);
     const s = p.rig.root.scale.y;
-    const pivot = tB.set(p.pos.x, p.pos.y + (p.crouch ? 1.2 : 1.6) * s, p.pos.z);
 
+    if (this.onPlane.has(p) && this.plane) {
+      const pp = this.plane.group.position;
+      cam.position.set(pp.x - f.x * 42, pp.y + 10 - f.y * 42, pp.z - f.z * 42);
+      cam.rotation.set(p.pitch - 0.15, p.yaw + Math.PI, 0);
+      if (Math.abs(cam.fov - 65) > 0.1) {
+        cam.fov = 65;
+        cam.updateProjectionMatrix();
+      }
+      return;
+    }
+
+    const pivot = tB.set(p.pos.x, p.pos.y + (p.crouch ? 1.2 : 1.6) * s, p.pos.z);
     if (!p.alive) {
       p.yaw += dt * 0.25;
       p.pitch += (-0.35 - p.pitch) * dt * 2;
@@ -1547,7 +1825,7 @@ export class Match {
       if (ads) fov = Math.max(def!.adsFov, 50);
     }
     if (this.shake > 0) {
-      const k = this.shake * (profile.settings.quality === 'low' ? 0.05 : 0.07);
+      const k = this.shake * 0.06;
       cam.position.x += (Math.random() - 0.5) * k;
       cam.position.y += (Math.random() - 0.5) * k;
       this.shake = Math.max(0, this.shake - dt * 4);
@@ -1560,7 +1838,7 @@ export class Match {
     cam.rotation.set(p.pitch, p.yaw + Math.PI, 0);
   }
 
-  private project(v: THREE.Vector3): { x: number; y: number } | null {
+  project(v: THREE.Vector3): { x: number; y: number } | null {
     const t = tD.copy(v).project(this.camera);
     if (t.z > 1 || t.x < -1.1 || t.x > 1.1 || t.y < -1.1 || t.y > 1.1) return null;
     return { x: ((t.x + 1) / 2) * innerWidth, y: ((1 - t.y) / 2) * innerHeight };
@@ -1575,66 +1853,98 @@ export class Match {
       if (this.toastT <= 0) h.center('');
     }
     this.streakT -= dt;
-    h.vitals(p.hp, p.armor, p.shieldT > 0);
-    h.weapons(p.slots, p.cur, p.reloadT > 0);
-    h.counts(p.meds, p.gel, p.nades);
-    h.ability(ABIL_ICON[p.hero.ability.id], 1 - p.abilityCd / p.hero.ability.cd);
-    h.healing(p.healT > 0 ? 1 - p.healT / 2.2 : 0);
-    const w = p.weapon;
-    const def = w ? WEAPONS[w.id] : null;
-    const ads = this.input.ads;
-    const moving = p.speedNow > 1.5;
-    const spread = def ? (ads ? def.adsSpread : def.spread) * (moving ? 1.35 : 1) * (p.onGround ? 1 : 1.8) * (p.crouch ? 0.7 : 1) : 0.02;
-    h.crosshair(4 + spread * 520 + (p.cd > 0 ? 3 : 0), !this.scoped && p.alive && !p.dropping, !!this.assist);
-    h.scope(this.scoped);
+    const plane = this.onPlane.has(p) && !this.spec;
+    h.el.classList.toggle('plane', plane);
+    if (!this.spec) {
+      h.vitals(p.hp, p.armor, p.shieldT > 0);
+      h.weapons(p.slots, p.cur, p.reloadT > 0);
+      h.counts(p.meds, p.gel, p.nades);
+      h.ability(ABIL_ICON[p.hero.ability.id], 1 - p.abilityCd / p.hero.ability.cd);
+      h.healing(p.healT > 0 ? 1 - p.healT / 2.2 : 0);
+      const w = p.weapon;
+      const def = w ? WEAPONS[w.id] : null;
+      const moving = p.speedNow > 1.5;
+      const spread = def ? (this.input.ads ? def.adsSpread : def.spread) * (moving ? 1.35 : 1) * (p.onGround ? 1 : 1.8) * (p.crouch ? 0.7 : 1) : 0.02;
+      h.crosshair(4 + spread * 520 + (p.cd > 0 ? 3 : 0), !this.scoped && p.alive && !p.dropping && !plane, !!this.assist);
+      h.scope(this.scoped);
+    } else {
+      h.crosshair(0, false, false);
+      h.scope(false);
+    }
 
     const alive = this.actors.filter((a) => a.alive).length;
     h.text('#tsAlive b', alive);
     h.text('#tsKills b', p.kills);
-    if (this.mode === 'br') {
+    if (this.mode === 'br' || this.mode === 'watch') {
       const z = this.zone;
       const ph = ZONE_PHASES[z.phase];
-      const txt = !ph ? 'FINAL' : this.time <= 14 ? '--' : z.shrinking ? 'A FECHAR' : fmt(ph.wait - z.t);
+      const txt = !ph ? 'FINAL' : !z.started ? 'AVIÃO' : z.t < 0 ? fmt(ph.wait - z.t) : z.shrinking ? 'A FECHAR' : fmt(ph.wait - z.t);
       h.text('#tsZone b', txt);
       h.toggle('#tsZone', 'warn', z.shrinking);
-      const out = Math.hypot(p.pos.x - z.cx, p.pos.z - z.cz) > z.r;
-      h.toggle('#tsZone', 'out', out && p.alive);
+      const out = !this.spec && Math.hypot(p.pos.x - z.cx, p.pos.z - z.cz) > z.r;
+      h.toggle('#tsZone', 'out', out && p.alive && !p.dropping && !plane);
     } else if (this.mode === 'squad') {
       h.text('#tsScore .a', this.scoreA);
       h.text('#tsScore .f', this.scoreB);
       h.text('#tsTime', fmt(Math.max(0, 300 - this.time)));
     }
-    if (!p.alive && this.mode === 'squad' && p.respawnT > 0) h.center(`RENASCES EM ${Math.ceil(p.respawnT)}`);
-    else if (p.dropping) h.center(p.glide ? '' : `QUEDA LIVRE · ${Math.round(p.pos.y)} m`);
+    if (!this.spec) {
+      if (plane) h.center(`A BORDO · ${this.onPlane.size}`);
+      else if (!p.alive && this.mode === 'squad' && p.respawnT > 0) h.center(`RENASCES EM ${Math.ceil(p.respawnT)}`);
+      else if (p.dropping) h.center(p.glide ? '' : `QUEDA LIVRE · ${Math.round(p.pos.y - p.ground)} m`);
+      else if (this.toastT <= 0) h.center('');
 
-    // tags
-    this.tagTimer -= dt;
-    const recheck = this.tagTimer <= 0;
-    if (recheck) this.tagTimer = 0.25;
-    let n = 0;
-    for (const a of this.actors) {
-      if (a.isPlayer || !a.alive) continue;
-      const d = a.pos.distanceTo(p.pos);
-      const ally = a.team === p.team;
-      if (d > (ally ? 120 : 55) && !(p.revealT > 0 && d < 60)) continue;
-      if (!ally && recheck) a.seen = p.revealT > 0 || this.canSee(p, a);
-      if (!ally && !a.seen) continue;
-      const s = this.project(tA.set(a.pos.x, a.pos.y + 2.1 * a.rig.root.scale.y, a.pos.z));
-      if (!s) continue;
-      h.tag(n++, s.x, s.y, a.name, a.hp, ally ? 'ally' : 'enemy', !ally || a.hp < 100);
-    }
-    h.hideTags(n);
+      this.tagTimer -= dt;
+      const recheck = this.tagTimer <= 0;
+      if (recheck) this.tagTimer = 0.25;
+      let n = 0;
+      for (const a of this.actors) {
+        if (a.isPlayer || !a.alive || this.onPlane.has(a)) continue;
+        const ally = a.team === p.team;
+        const dx = a.pos.x - p.pos.x, dz = a.pos.z - p.pos.z;
+        if (Math.abs(dx) > 120 || Math.abs(dz) > 120) continue;
+        const d = Math.hypot(dx, dz);
+        if (d > (ally ? 120 : 55) && !(p.revealT > 0 && d < 60)) continue;
+        if (!ally && recheck) a.seen = p.revealT > 0 || this.canSee(p, a);
+        if (!ally && !a.seen) continue;
+        const s = this.project(tA.set(a.pos.x, a.pos.y + 2.1 * a.rig.root.scale.y, a.pos.z));
+        if (!s) continue;
+        h.tag(n++, s.x, s.y, a.name, a.hp, ally ? 'ally' : 'enemy', !ally || a.hp < 100);
+      }
+      h.hideTags(n);
+    } else if (this.toastT <= 0) h.center('');
 
     this.drawMinimap();
+    if (this.mapOpen) {
+      this.mapT -= dt;
+      if (this.mapT <= 0) {
+        this.mapT = 0.2;
+        this.drawBigMap();
+      }
+    }
+    h.toggle('#bigmap', 'show', this.mapOpen);
+  }
+
+  private focusPos(): [number, number, number] {
+    if (this.spec) {
+      const c = this.camera;
+      const t = this.spec.target;
+      if (t && this.spec.mode !== 'free' && this.spec.mode !== 'map') return [t.rig.root.position.x, t.rig.root.position.z, t.rig.root.rotation.y];
+      return [c.position.x, c.position.z, c.rotation.y - Math.PI];
+    }
+    const p = this.player;
+    if (this.onPlane.has(p) && this.plane) return [this.plane.pos.x, this.plane.pos.z, p.yaw];
+    return [p.pos.x, p.pos.z, p.yaw];
   }
 
   private drawMinimap() {
     const c = this.hud.mini;
-    const p = this.player;
+    const [px, pz, yaw] = this.focusPos();
     const S = 150, H = 75;
-    const view = this.mode === 'br' ? (p.dropping ? 110 : 60) : 45;
+    const p = this.player;
+    const view = this.mode === 'squad' || this.mode === 'train' ? 45 : p.dropping || this.onPlane.has(p) ? 120 : 62;
     const k = H / view;
-    const W = this.world.radius + 10;
+    const W = this.world.terrain.S;
     c.save();
     c.clearRect(0, 0, S, S);
     c.beginPath();
@@ -1643,36 +1953,12 @@ export class Match {
     c.fillStyle = '#1d6f9c';
     c.fillRect(0, 0, S, S);
     c.translate(H, H);
-    c.rotate(p.yaw + Math.PI);
+    c.rotate(yaw + Math.PI);
     c.scale(k, k);
-    c.translate(-p.pos.x, -p.pos.z);
+    c.translate(-px, -pz);
     c.drawImage(this.miniBase, -W, -W, W * 2, W * 2);
-    if (this.mode === 'br') {
-      const z = this.zone;
-      c.lineWidth = 2 / k;
-      c.strokeStyle = '#ffffff';
-      c.beginPath();
-      c.arc(z.ncx, z.ncz, Math.max(0.1, z.nr), 0, Math.PI * 2);
-      c.stroke();
-      c.strokeStyle = '#4a7dff';
-      c.lineWidth = 3 / k;
-      c.beginPath();
-      c.arc(z.cx, z.cz, Math.max(0.1, z.r), 0, Math.PI * 2);
-      c.stroke();
-    }
-    const dot = 3.4 / k;
-    for (const a of this.actors) {
-      if (a.isPlayer || !a.alive) continue;
-      const ally = a.team === p.team;
-      const d = a.pos.distanceTo(p.pos);
-      if (!ally && !(a.firedT > 0 && d < 70) && !(p.revealT > 0 && d < 60)) continue;
-      c.fillStyle = ally ? '#3fa9ff' : '#ff3b4e';
-      c.beginPath();
-      c.arc(a.pos.x, a.pos.z, dot, 0, Math.PI * 2);
-      c.fill();
-    }
+    this.drawOverlay(c, k, false);
     c.restore();
-    // player arrow
     c.fillStyle = '#ffb81c';
     c.strokeStyle = '#000';
     c.lineWidth = 1.5;
@@ -1686,20 +1972,112 @@ export class Match {
     c.stroke();
     const nEl = this.hud.el.querySelector<HTMLElement>('#minimap .n');
     if (nEl) {
-      const th = p.yaw + Math.PI;
+      const th = yaw + Math.PI;
       nEl.style.transform = `translate(${Math.sin(th) * 64}px, ${-Math.cos(th) * 64}px)`;
     }
   }
 
+  /** Zone circles, plane route and actor dots in world coordinates (context already transformed). */
+  private drawOverlay(c: CanvasRenderingContext2D, k: number, big: boolean) {
+    const p = this.player;
+    const z = this.zone;
+    if (this.mode === 'br' || this.mode === 'watch') {
+      c.lineWidth = 2 / k;
+      c.strokeStyle = '#ffffff';
+      c.beginPath();
+      c.arc(z.ncx, z.ncz, Math.max(0.1, z.nr), 0, Math.PI * 2);
+      c.stroke();
+      c.strokeStyle = '#4a7dff';
+      c.lineWidth = 3 / k;
+      c.beginPath();
+      c.arc(z.cx, z.cz, Math.max(0.1, z.r), 0, Math.PI * 2);
+      c.stroke();
+    } else if (this.arena) {
+      c.strokeStyle = '#ff4a6a';
+      c.lineWidth = 2.5 / k;
+      c.beginPath();
+      c.arc(this.arena.x, this.arena.z, ARENA_R, 0, Math.PI * 2);
+      c.stroke();
+    }
+    if (this.plane && !this.plane.done) {
+      c.setLineDash([6 / k, 5 / k]);
+      c.strokeStyle = '#ffd34d';
+      c.lineWidth = 2 / k;
+      c.beginPath();
+      c.moveTo(this.plane.start.x, this.plane.start.z);
+      c.lineTo(this.plane.end.x, this.plane.end.z);
+      c.stroke();
+      c.setLineDash([]);
+      c.fillStyle = '#ffd34d';
+      c.beginPath();
+      c.arc(this.plane.pos.x, this.plane.pos.z, 5 / k, 0, Math.PI * 2);
+      c.fill();
+    }
+    const dot = (big ? 4 : 3.4) / k;
+    for (const a of this.actors) {
+      if (a.isPlayer || !a.alive || this.onPlane.has(a)) continue;
+      const ally = a.team === p.team && this.mode === 'squad';
+      const d = a.pos.distanceTo(p.pos);
+      if (!this.spec && !ally && !(a.firedT > 0 && d < 70) && !(p.revealT > 0 && d < 60)) continue;
+      c.fillStyle = this.spec ? (a === this.spec.target ? '#ffd34d' : this.mode === 'squad' ? (a.team === 0 ? '#3fa9ff' : '#ff3b4e') : '#ffffff') : ally ? '#3fa9ff' : '#ff3b4e';
+      c.beginPath();
+      c.arc(a.pos.x, a.pos.z, dot, 0, Math.PI * 2);
+      c.fill();
+    }
+  }
+
+  private drawBigMap() {
+    const cv = this.hud.el.querySelector<HTMLCanvasElement>('#bigmap canvas');
+    if (!cv) return;
+    const size = Math.max(200, Math.min(innerWidth, innerHeight) - 40);
+    if (cv.width !== size) cv.width = cv.height = size;
+    const c = cv.getContext('2d')!;
+    const S = this.world.terrain.S;
+    const k = size / (S * 2);
+    c.save();
+    c.clearRect(0, 0, size, size);
+    c.scale(k, k);
+    c.translate(S, S);
+    c.drawImage(this.miniBase, -S, -S, S * 2, S * 2);
+    this.drawOverlay(c, k, true);
+    c.font = `600 ${12 / k}px Rajdhani, sans-serif`;
+    c.textAlign = 'center';
+    for (const poi of this.world.pois) {
+      if (poi.kind === 'range') continue;
+      c.fillStyle = 'rgba(0,0,0,.55)';
+      const w = c.measureText(poi.name).width + 8 / k;
+      c.fillRect(poi.x - w / 2, poi.z - 10 / k, w, 14 / k);
+      c.fillStyle = '#fff';
+      c.fillText(poi.name, poi.x, poi.z + 1 / k);
+    }
+    const [px, pz, yaw] = this.focusPos();
+    c.translate(px, pz);
+    c.rotate(-yaw + Math.PI);
+    c.fillStyle = '#ffb81c';
+    c.strokeStyle = '#000';
+    c.lineWidth = 1.5 / k;
+    c.beginPath();
+    c.moveTo(0, 9 / k);
+    c.lineTo(6 / k, -6 / k);
+    c.lineTo(0, -2 / k);
+    c.lineTo(-6 / k, -6 / k);
+    c.closePath();
+    c.fill();
+    c.stroke();
+    c.restore();
+  }
+
   dispose() {
+    this.spec?.dispose();
     this.input.dispose();
     this.hud.dispose();
     this.pauseEl.remove();
     for (const a of this.actors) a.rig.dispose();
+    if (this.mode === 'watch') this.player.rig.dispose();
     this.world.dispose();
     this.fx.dispose();
-    this.gelGeo.dispose();
-    this.gelMat.dispose();
+    this.gloo.dispose();
+    this.plane?.dispose();
     this.auraGeo.dispose();
     this.auraMat.dispose();
     this.nadeGeo.dispose();
@@ -1707,7 +2085,6 @@ export class Match {
     (this.zoneWall?.material as THREE.Material | undefined)?.dispose();
     this.zoneRing?.geometry.dispose();
     (this.zoneRing?.material as THREE.Material | undefined)?.dispose();
-    for (const l of this.loot) if (l.alive) this.removeLoot(l);
   }
 }
 

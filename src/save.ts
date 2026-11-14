@@ -25,7 +25,9 @@ export interface Profile {
   stats: { matches: number; wins: number; kills: number; best: number };
   settings: Settings;
   lastDaily: number;
-  mode: 'br' | 'squad' | 'train';
+  mode: 'br' | 'squad' | 'train' | 'watch';
+  map: 'solaris' | 'inferna';
+  gloo: string;
   difficulty: 'easy' | 'normal' | 'hard';
 }
 
@@ -39,7 +41,7 @@ function fresh(): Profile {
     xp: 0,
     coins: 2500,
     diamonds: 300,
-    owned: ['hero:kai', ...ITEMS.filter((i) => !i.price.coins && !i.price.diamonds).map((i) => i.id)],
+    owned: ['hero:kai', 'gloo:classic', ...ITEMS.filter((i) => !i.price.coins && !i.price.diamonds).map((i) => i.id)],
     hero: 'kai',
     outfit: { ...DEFAULT_OUTFIT },
     weaponSkins: {},
@@ -48,6 +50,8 @@ function fresh(): Profile {
     settings: { sens: 5, aimAssist: 2, quality: isTouch ? 'low' : 'medium', volume: 70, showFps: false, leftFire: true },
     lastDaily: 0,
     mode: 'br',
+    map: 'solaris',
+    gloo: 'classic',
     difficulty: 'normal',
   };
 }

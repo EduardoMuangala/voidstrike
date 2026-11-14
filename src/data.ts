@@ -151,12 +151,13 @@ export const HEROES: HeroDef[] = [
 export const HERO_BY_ID = new Map(HEROES.map((h) => [h.id, h]));
 
 // ---------------------------------------------------------------- MODES
-export type ModeId = 'br' | 'squad' | 'train';
+export type ModeId = 'br' | 'squad' | 'train' | 'watch';
 export type Difficulty = 'easy' | 'normal' | 'hard';
-export const MODES: { id: ModeId; name: string; map: string; desc: string; players: string; color: string }[] = [
-  { id: 'br', name: 'BATTLE ROYALE', map: 'ILHA VOID', desc: 'Salta do céu, apanha loot e sê o último de pé. Booyah!', players: '16 JOGADORES', color: '#ff7a1a' },
-  { id: 'squad', name: 'CONTRA SQUAD', map: 'VILA PORTO', desc: '4v4 com equipamento do Arsenal. Primeira equipa a 25 abates vence.', players: '4 VS 4', color: '#3fa9ff' },
-  { id: 'train', name: 'TREINO', map: 'CAMPO DE TIRO', desc: 'Testa armas e habilidades contra alvos móveis sem pressão.', players: 'SOLO', color: '#2bd97c' },
+export const MODES: { id: ModeId; name: string; desc: string; players: string; color: string; maps: boolean }[] = [
+  { id: 'br', name: 'BATTLE ROYALE', desc: 'Salta do avião, apanha loot e sê o último de pé. Partidas de ~7 minutos.', players: '48 JOGADORES', color: '#ff7a1a', maps: true },
+  { id: 'squad', name: 'CONTRA SQUAD', desc: '4v4 numa zona do mapa com o equipamento do Arsenal. Primeira equipa a 25 abates.', players: '4 VS 4', color: '#3fa9ff', maps: true },
+  { id: 'watch', name: 'MODO OBSERVADOR', desc: 'Assiste a uma partida de 48 com câmaras de transmissão, vista tática e repetições.', players: 'TRANSMISSÃO', color: '#ff3b6b', maps: true },
+  { id: 'train', name: 'TREINO', desc: 'Campo de tiro com prédio de 3 andares, armazém e alvos móveis.', players: 'SOLO', color: '#2bd97c', maps: false },
 ];
 
 export function priceLabel(p: Price): string {
@@ -164,3 +165,15 @@ export function priceLabel(p: Price): string {
   if (p.coins) return `${p.coins}`;
   return 'GRÁTIS';
 }
+
+// ---------------------------------------------------------------- GLOO WALL SKINS
+export interface GlooSkin { id: string; name: string; body: number; emissive: number; cap: number; opacity: number; rarity: Rarity; price: Price }
+export const GLOO_SKINS: GlooSkin[] = [
+  { id: 'classic', name: 'GELO CLÁSSICO', body: 0x9fe8ff, emissive: 0x1d5f7a, cap: 0xeafcff, opacity: 0.86, rarity: 'common', price: {} },
+  { id: 'lava', name: 'LAVA', body: 0xff5a1f, emissive: 0x6a1500, cap: 0xffd23f, opacity: 0.94, rarity: 'rare', price: { coins: 900 } },
+  { id: 'rose', name: 'CRISTAL ROSA', body: 0xff8ad8, emissive: 0x6a1f50, cap: 0xffe3f6, opacity: 0.88, rarity: 'rare', price: { coins: 1100 } },
+  { id: 'toxic', name: 'TÓXICO', body: 0x7cff4f, emissive: 0x1f5a10, cap: 0xdcff8a, opacity: 0.9, rarity: 'epic', price: { diamonds: 120 } },
+  { id: 'galaxy', name: 'GALÁXIA', body: 0x6b3bd6, emissive: 0x2a0a6a, cap: 0x2bf5ff, opacity: 0.92, rarity: 'epic', price: { diamonds: 180 } },
+  { id: 'gold', name: 'OURO REAL', body: 0xffc533, emissive: 0x6a4a00, cap: 0xfff2b0, opacity: 0.95, rarity: 'legendary', price: { diamonds: 260 } },
+];
+export const glooItemId = (s: string) => `gloo:${s}`;
