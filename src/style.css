@@ -567,3 +567,14 @@ body:not(.ingame) #app {
 #authForm .btn-primary.big { width: 100%; margin-top: 4px; }
 .auth-msg { min-height: 16px; font-size: 13px; color: var(--green); text-align: center; }
 .auth-msg.bad { color: var(--red); }
+
+/* ============================================================== ROOMS */
+.room-card .room-code { margin-top: 2px; font-family: var(--head); font-size: 15px; letter-spacing: 2px; color: var(--acc); }
+.room-code-big { display: flex; align-items: center; gap: 8px; font-size: 13px; letter-spacing: 1.5px; color: var(--muted); }
+.room-code-big b { font-family: var(--head); font-size: 30px; letter-spacing: 6px; color: var(--acc); }
+.btn-primary.on { filter: brightness(0.75); }
+.room-members { list-style: none; display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+.room-members li { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: rgba(255, 255, 255, 0.04); border-left: 3px solid var(--muted); font-size: 14px; }
+.room-members li.ready { border-color: var(--green); }
+.room-members li span { font-size: 11px; letter-spacing: 1px; color: var(--muted); }
+.room-members li.ready span { color: var(--green); }
