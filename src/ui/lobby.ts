@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   ALL_WEAPON_IDS, HEROES, HERO_BY_ID, ITEMS, ITEM_BY_ID, MODES, RARITY, SLOTS, WEAPONS, WEAPON_SKINS,
-  weaponSkinItemId, type Difficulty, type ModeId, type Outfit, type Price, type Slot, type WeaponId,
+  weaponSkinItemId, GLOO_SKINS, glooItemId, type Difficulty, type ModeId, type Outfit, type Price, type Slot, type WeaponId,
 } from '../data';
 import { buy, canAfford, grantRewards, owns, profile, resetProfile, save, xpForLevel } from '../save';
 import { sfx, unlockAudio } from '../audio';
@@ -10,9 +10,10 @@ import { glow, mat } from '../models/materials';
 import { COIN, GEM, MENU_ICONS, heroIcon, itemIcon, weaponIcon } from './icons';
 import { esc } from '../game/hud';
 import type { MatchResult } from '../game/match';
+import { BR_MAPS } from '../game/maps';
 
 type Page = 'home' | 'store' | 'wardrobe' | 'heroes' | 'arsenal';
-type StoreTab = 'heroes' | 'outfits' | 'weapons';
+type StoreTab = 'heroes' | 'outfits' | 'weapons' | 'gloo';
 
 const DAILY_MS = 20 * 3600 * 1000;
 const priceHtml = (p: Price) => (p.diamonds ? `${GEM}<b>${p.diamonds}</b>` : p.coins ? `${COIN}<b>${p.coins}</b>` : '<b>GRÁTIS</b>');
@@ -31,6 +32,10 @@ export class Lobby {
   private previewHero: string | null = null;
   private previewOutfit: Outfit | null = null;
   private previewWeapon: { id: WeaponId; skin: string } | null = null;
+  private previewGloo: string | null = null;
+  private glooKey = '';
+  private glooGroup: THREE.Group | null = null;
+  private glooAge = 0;
   private arsenalSel: WeaponId = profile.loadout[0];
   private yaw = 0.5;
   private yawVel = 0;
@@ -145,8 +150,57 @@ export class Lobby {
     }
   }
 
+  private syncGloo(dt: number) {
+    const want = this.previewGloo || '';
+    if (want !== this.glooKey) {
+      this.glooKey = want;
+      if (this.glooGroup) {
+        this.stage.remove(this.glooGroup);
+        this.glooGroup.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh) {
+            m.geometry.dispose();
+            (m.material as THREE.Material).dispose();
+          }
+        });
+        this.glooGroup = null;
+      }
+      if (want) {
+        const s = GLOO_SKINS.find((x) => x.id === want)!;
+        const g = new THREE.Group();
+        const body = new THREE.MeshLambertMaterial({ color: s.body, emissive: s.emissive, transparent: true, opacity: s.opacity });
+        const cap = new THREE.MeshLambertMaterial({ color: s.cap, emissive: s.emissive });
+        for (let i = 0; i < 7; i++) {
+          const a = -0.75 + (i + 0.5) * (1.5 / 7);
+          const seg = new THREE.Group();
+          seg.position.set(Math.sin(a) * 2.3, 0, -Math.cos(a) * 2.3 + 0.4);
+          seg.rotation.y = -a;
+          const b = new THREE.Mesh(new THREE.BoxGeometry(0.72, 2.2, 0.45).translate(0, 1.1, 0), body);
+          const c = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.3, 3, 8).rotateZ(Math.PI / 2).translate(0, 2.2, 0), cap);
+          seg.add(b, c);
+          seg.userData.delay = Math.abs(i - 3) * 0.05;
+          g.add(seg);
+        }
+        g.scale.setScalar(0.8);
+        g.position.z = -0.4;
+        this.glooGroup = g;
+        this.glooAge = 0;
+        this.stage.add(g);
+      }
+    }
+    if (this.glooGroup) {
+      this.glooAge += dt;
+      for (const seg of this.glooGroup.children) {
+        const t = Math.max(0, Math.min(1, (this.glooAge - seg.userData.delay) / 0.25));
+        const k = 1 + 2.9 * Math.pow(t - 1, 3) + 1.9 * Math.pow(t - 1, 2);
+        seg.scale.set(0.7 + 0.3 * t, Math.max(0.02, k), 0.7 + 0.3 * t);
+      }
+    }
+  }
+
   update(dt: number) {
     this.syncRig();
+    this.syncGloo(dt);
     const t = performance.now() / 1000;
     if (!this.dragging) {
       this.yawVel *= 0.92;
@@ -240,7 +294,7 @@ export class Lobby {
         <button class="modecard" data-a="modes" style="--mc:${mode.color}">
           <span class="mtag">${mode.players}</span>
           <b>${mode.name}</b>
-          <small>${mode.map} · ${{ easy: 'FÁCIL', normal: 'NORMAL', hard: 'DIFÍCIL' }[p.difficulty]}</small>
+          <small>${mode.maps ? BR_MAPS.find((x) => x.id === p.map)!.name : 'CAMPO DE TREINO'} · ${{ easy: 'FÁCIL', normal: 'NORMAL', hard: 'DIFÍCIL' }[p.difficulty]}</small>
           <i class="chev">▸</i>
         </button>
         <button class="startbtn" data-a="start"><span>INICIAR</span></button>
@@ -269,7 +323,7 @@ export class Lobby {
 
   // ---------- store
   private storeHtml() {
-    const tabs: [StoreTab, string][] = [['outfits', 'ROUPAS'], ['heroes', 'PERSONAGENS'], ['weapons', 'SKINS DE ARMAS']];
+    const tabs: [StoreTab, string][] = [['outfits', 'ROUPAS'], ['gloo', 'GELO'], ['heroes', 'PERSONAGENS'], ['weapons', 'SKINS DE ARMAS']];
     let cards = '';
     if (this.storeTab === 'outfits') {
       cards = ITEMS.filter((i) => i.price.coins || i.price.diamonds)
@@ -277,6 +331,8 @@ export class Lobby {
         .join('');
     } else if (this.storeTab === 'heroes') {
       cards = HEROES.map((h) => this.card('hero:' + h.id, h.name, RARITY[h.rarity].color, heroIcon(h), owns('hero:' + h.id) ? '<em>ADQUIRIDO</em>' : priceHtml(h.price), h.role)).join('');
+    } else if (this.storeTab === 'gloo') {
+      cards = GLOO_SKINS.map((g) => this.card(glooItemId(g.id), g.name, RARITY[g.rarity].color, glooIcon(g.body, g.cap), owns(glooItemId(g.id)) ? (profile.gloo === g.id ? '<em>EQUIPADO</em>' : '<em>ADQUIRIDO</em>') : priceHtml(g.price), 'PAREDE DE GELO')).join('');
     } else {
       for (const w of ALL_WEAPON_IDS)
         for (const s of WEAPON_SKINS) {
@@ -301,6 +357,10 @@ export class Lobby {
     if (id.startsWith('hero:')) {
       const h = HERO_BY_ID.get(id.slice(5))!;
       return { name: h.name, rarity: RARITY[h.rarity].label, color: RARITY[h.rarity].color, price: h.price, desc: `<b>${h.ability.name}</b> — ${h.ability.desc}<br><span class="bio">${h.bio}</span>`, owned: owns(id), equipped: profile.hero === h.id };
+    }
+    if (id.startsWith('gloo:')) {
+      const g = GLOO_SKINS.find((x) => x.id === id.slice(5))!;
+      return { name: g.name, rarity: RARITY[g.rarity].label, color: RARITY[g.rarity].color, price: g.price, desc: 'Parede de gelo curva: lança, cai e sobe em segundos. Protege de tiros até partir.', owned: owns(id), equipped: profile.gloo === g.id };
     }
     if (id.startsWith('wskin:')) {
       const [, w, s] = id.split(':') as [string, WeaponId, string];
@@ -409,6 +469,7 @@ export class Lobby {
     this.previewHero = null;
     this.previewOutfit = null;
     this.previewWeapon = null;
+    this.previewGloo = null;
     if (page === 'arsenal') this.previewWeapon = { id: this.arsenalSel, skin: profile.weaponSkins[this.arsenalSel] || 'default' };
     this.render();
   }
@@ -418,7 +479,9 @@ export class Lobby {
     this.previewHero = null;
     this.previewOutfit = null;
     this.previewWeapon = null;
+    this.previewGloo = null;
     if (id.startsWith('hero:')) this.previewHero = id.slice(5);
+    else if (id.startsWith('gloo:')) this.previewGloo = id.slice(5);
     else if (id.startsWith('wskin:')) {
       const [, w, s] = id.split(':') as [string, WeaponId, string];
       this.previewWeapon = { id: w, skin: s };
@@ -432,6 +495,7 @@ export class Lobby {
     const id = this.sel;
     if (!id) return;
     if (id.startsWith('hero:')) profile.hero = id.slice(5);
+    else if (id.startsWith('gloo:')) profile.gloo = id.slice(5);
     else if (id.startsWith('wskin:')) {
       const [, w, s] = id.split(':') as [string, WeaponId, string];
       profile.weaponSkins[w] = s;
@@ -463,7 +527,7 @@ export class Lobby {
   private onClick(e: MouseEvent) {
     unlockAudio();
     const t = e.target as HTMLElement;
-    const b = t.closest<HTMLElement>('[data-a],[data-page],[data-tab],[data-sel],[data-slot],[data-wear],[data-hero],[data-wpn],[data-skin],[data-load],[data-mode],[data-diff]');
+    const b = t.closest<HTMLElement>('[data-a],[data-page],[data-tab],[data-sel],[data-slot],[data-wear],[data-hero],[data-wpn],[data-skin],[data-load],[data-mode],[data-diff],[data-map]');
     if (!b) return;
     sfx.click();
     const d = b.dataset;
@@ -473,6 +537,7 @@ export class Lobby {
       this.sel = null;
       this.previewHero = this.previewOutfit = null;
       this.previewWeapon = null;
+      this.previewGloo = null;
       return this.render();
     }
     if (d.sel) {
@@ -516,6 +581,12 @@ export class Lobby {
       profile.mode = d.mode as ModeId;
       save();
       this.el.querySelectorAll('.mselect .mcard').forEach((c) => c.classList.toggle('sel', (c as HTMLElement).dataset.mode === d.mode));
+      return;
+    }
+    if (d.map) {
+      profile.map = d.map as typeof profile.map;
+      save();
+      this.el.querySelectorAll('.mapsel button').forEach((c) => c.classList.toggle('sel', (c as HTMLElement).dataset.map === d.map));
       return;
     }
     if (d.diff) {
@@ -626,8 +697,10 @@ export class Lobby {
     this.modal(`
       <h2>SELECIONAR MODO</h2>
       <div class="mselect">
-        ${MODES.map((m) => `<button class="mcard ${profile.mode === m.id ? 'sel' : ''}" data-mode="${m.id}" style="--mc:${m.color}"><span class="mtag">${m.players}</span><b>${m.name}</b><small>${m.map}</small><p>${m.desc}</p></button>`).join('')}
+        ${MODES.map((m) => `<button class="mcard ${profile.mode === m.id ? 'sel' : ''}" data-mode="${m.id}" style="--mc:${m.color}"><span class="mtag">${m.players}</span><b>${m.name}</b><p>${m.desc}</p></button>`).join('')}
       </div>
+      <h4>MAPA (BATTLE ROYALE · 4V4 · OBSERVADOR)</h4>
+      <div class="mapsel">${BR_MAPS.map((mp) => `<button class="${profile.map === mp.id ? 'sel' : ''}" data-map="${mp.id}" style="--mc:${mp.color}"><b>${mp.name}</b><span>${mp.sub}</span></button>`).join('')}</div>
       <h4>DIFICULDADE DOS BOTS</h4>
       <div class="diffs">${(['easy', 'normal', 'hard'] as Difficulty[]).map((d) => `<button class="${profile.difficulty === d ? 'on' : ''}" data-diff="${d}">${{ easy: 'FÁCIL', normal: 'NORMAL', hard: 'DIFÍCIL' }[d]}</button>`).join('')}</div>
       <div class="mrow"><button class="btn-primary" id="modeOk">CONFIRMAR</button></div>
@@ -652,7 +725,7 @@ export class Lobby {
         <label class="chk"><input type="checkbox" data-set="fps" ${s.showFps ? 'checked' : ''}/> MOSTRAR FPS</label>
       </div>
       <div class="keys">
-        <b>PC</b> WASD mover · RATO mirar · CLIQUE disparar · DIREITO zoom · ESPAÇO saltar · C agachar · R recarregar · 1/2/3 armas · E gel · G granada · H curar · Q habilidade · F apanhar · ESC pausa
+        <b>PC</b> WASD mover · RATO mirar · CLIQUE disparar · DIREITO zoom · ESPAÇO saltar · C agachar · R recarregar · 1/2/3 armas · E gelo · G granada · H curar · Q habilidade · F apanhar · M mapa · ESC pausa<br><b>OBSERVADOR</b> 1-5 câmaras · ←/→ jogador · R repetição · ESPAÇO/C subir/descer
       </div>
       <div class="mrow"><button class="btn-ghost danger" id="resetBtn">APAGAR PROGRESSO</button><button class="btn-primary" data-a="close">FECHAR</button></div>
     `);
@@ -680,9 +753,10 @@ export class Lobby {
   private matchmaking() {
     unlockAudio();
     const mode = MODES.find((m) => m.id === profile.mode)!;
-    const total = mode.id === 'br' ? 16 : mode.id === 'squad' ? 8 : 1;
+    const total = mode.id === 'br' || mode.id === 'watch' ? 48 : mode.id === 'squad' ? 8 : 1;
+    const mapName = mode.maps ? BR_MAPS.find((x) => x.id === profile.map)!.name : 'CAMPO DE TREINO';
     const m = this.modal(`
-      <div class="mm"><div class="spin"></div><h2>A PROCURAR PARTIDA</h2><p>${mode.name} · ${mode.map}</p><b id="mmCount">1 / ${total}</b>
+      <div class="mm"><div class="spin"></div><h2>A PROCURAR PARTIDA</h2><p>${mode.name} · ${mapName}</p><b id="mmCount">1 / ${total}</b>
       <div class="mrow"><button class="btn-ghost" id="mmCancel">CANCELAR</button></div></div>`, 'locked');
     let n = 1;
     let done = false;
@@ -712,6 +786,12 @@ export class Lobby {
   showResult(r: MatchResult) {
     this.page = 'home';
     if (r.quit && r.mode === 'train') return this.render();
+    if (r.mode === 'watch') {
+      grantRewards(0, 0, r.quit ? 0 : 40);
+      this.render();
+      this.modal(`<div class="result win"><div class="rbig">BOOYAH!</div><div class="rsub">${r.winner ? 'CAMPEÃO: ' + esc(r.winner) : 'Transmissão terminada'}</div><div class="mrow"><button class="btn-primary" data-a="close">CONTINUAR</button></div></div>`, 'locked');
+      return;
+    }
     const p = profile;
     p.stats.matches++;
     p.stats.kills += r.kills;
@@ -722,7 +802,7 @@ export class Lobby {
     const xp = r.quit ? 10 : Math.round(80 + r.kills * 45 + (r.win ? 260 : 0) + r.time * 0.4);
     const ups = grantRewards(coins, gems, xp);
     const big = r.mode === 'br' ? (r.win ? 'BOOYAH!' : `#${r.rank}`) : r.win ? 'VITÓRIA' : 'DERROTA';
-    const sub = r.mode === 'br' ? (r.win ? 'Último sobrevivente!' : `de ${r.total} jogadores`) : r.mode === 'squad' ? `${r.scoreA} - ${r.scoreB}` : 'Treino concluído';
+    const sub = r.mode === 'br' ? (r.win ? 'Último sobrevivente!' : `de ${r.total} jogadores${r.winner ? ' · campeão ' + esc(r.winner) : ''}`) : r.mode === 'squad' ? `${r.scoreA} - ${r.scoreB}` : 'Treino concluído';
     const t = Math.round(r.time);
     this.render();
     this.modal(`
@@ -745,6 +825,14 @@ export class Lobby {
     this.el.style.display = on ? '' : 'none';
     if (on) this.render();
   }
+}
+
+function glooIcon(body: number, cap: number) {
+  const b = '#' + body.toString(16).padStart(6, '0'), c = '#' + cap.toString(16).padStart(6, '0');
+  return `<svg class="ico" viewBox="0 0 64 64">${[0, 1, 2, 3, 4].map((i) => {
+    const x = 6 + i * 10.6, y = 18 + Math.abs(i - 2) * 4;
+    return `<rect x="${x}" y="${y}" width="10" height="${42 - y}" rx="2" fill="${b}" opacity=".9"/><rect x="${x}" y="${y - 3}" width="10" height="6" rx="3" fill="${c}"/>`;
+  }).join('')}<rect x="4" y="56" width="56" height="4" rx="2" fill="rgba(0,0,0,.3)"/></svg>`;
 }
 
 function toggleFullscreen() {

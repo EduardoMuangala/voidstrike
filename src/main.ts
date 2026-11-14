@@ -30,6 +30,7 @@ const lobby = new Lobby(ui, (mode: ModeId, diff: Difficulty) => {
     match = new Match({
       mode,
       difficulty: diff,
+      map: profile.map,
       renderer,
       canvas,
       root: ui,

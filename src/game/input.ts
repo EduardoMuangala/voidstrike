@@ -1,4 +1,4 @@
-export type Action = 'reload' | 'slot0' | 'slot1' | 'slot2' | 'swap' | 'gel' | 'nade' | 'heal' | 'ability' | 'pickup' | 'pause' | 'jump' | 'crouch' | 'ads';
+export type Action = 'map' | 'reload' | 'slot0' | 'slot1' | 'slot2' | 'swap' | 'gel' | 'nade' | 'heal' | 'ability' | 'pickup' | 'pause' | 'jump' | 'crouch' | 'ads';
 
 export const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
@@ -40,7 +40,7 @@ export class Input {
       if (!this.keys.has(k)) {
         const map: Record<string, Action> = {
           KeyR: 'reload', Digit1: 'slot0', Digit2: 'slot1', Digit3: 'slot2', KeyQ: 'ability', KeyG: 'nade',
-          KeyE: 'gel', KeyH: 'heal', KeyF: 'pickup', Space: 'jump', KeyC: 'crouch', Escape: 'pause', KeyP: 'pause', Tab: 'swap',
+          KeyE: 'gel', KeyH: 'heal', KeyM: 'map', KeyF: 'pickup', Space: 'jump', KeyC: 'crouch', Escape: 'pause', KeyP: 'pause', Tab: 'swap',
         };
         if (map[k]) this.queue.add(map[k]);
       }
@@ -191,6 +191,10 @@ export class Input {
     this.mx = x;
     this.my = y;
     this.crouchHold = this.keys.has('ControlLeft');
+  }
+
+  key(code: string) {
+    return this.keys.has(code);
   }
 
   take(a: Action): boolean {

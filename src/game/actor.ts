@@ -70,6 +70,8 @@ export class Actor {
   speedNow = 0;
   stepT = 0;
   dashT = 0;
+  heat = 0;
+  glooCd = 0;
   seen = false;
   seenT = 0;
   aura: THREE.Mesh | null = null;
