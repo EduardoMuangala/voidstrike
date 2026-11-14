@@ -530,7 +530,7 @@ export class Match {
       this.updateActor(a, dt);
     }
     this.updateLoot(dt);
-    this.gloo.update(dt, this.camera.position);
+    this.gloo.update(dt);
     this.updateNades(dt);
     if (this.mode === 'br' || this.mode === 'watch') this.updateZone(dt);
     this.fx.update(dt);
@@ -837,7 +837,7 @@ export class Match {
       }
     }
     if (inp.take('reload')) this.startReload(p);
-    if (inp.take('gel')) this.throwGloo(p, p.yaw);
+    if (p.glooCd <= 0 && inp.take('gel')) this.throwGloo(p, p.yaw);
     if (inp.take('nade')) this.throwNade(p, this.camFwd(tA));
     if (inp.take('heal')) this.startHeal(p);
     if (inp.take('ability')) this.useAbility(p);
@@ -1058,15 +1058,26 @@ export class Match {
   private throwGloo(a: Actor, yaw: number) {
     if (a.gel <= 0 || a.dropping || !a.alive || a.glooCd > 0) return;
     a.gel--;
-    a.glooCd = 0.45;
+    a.glooCd = 0.22;
     const skin = a.isPlayer ? profile.gloo || 'classic' : a.id % 5 === 0 ? pick(['lava', 'rose', 'toxic', 'galaxy', 'gold']) : 'classic';
-    const from = new THREE.Vector3(a.pos.x + Math.sin(yaw) * 0.4, a.pos.y + 1.3, a.pos.z + Math.cos(yaw) * 0.4);
+    // distance: where the crosshair meets the ground (player) or a fixed step toward the threat (bots)
+    let d = 2.4;
+    if (a.isPlayer && !this.spec) {
+      const cam = this.camera.position;
+      const f = this.camFwd(tA);
+      const t = this.world.raycast(cam, f, 14);
+      const hx = cam.x + f.x * t - a.pos.x, hz = cam.z + f.z * t - a.pos.z;
+      d = t < 14 ? Math.hypot(hx, hz) : 4.5;
+    }
+    d = THREE.MathUtils.clamp(d, 1.6, 4.5);
+    // never through walls: stop just before the first obstacle at chest height
     const dir = tB.set(Math.sin(yaw), 0, Math.cos(yaw));
-    if (this.world.raycast(tC.set(a.pos.x, a.pos.y + 0.8, a.pos.z), dir, 2.2) < 2.2) {
-      const x = a.pos.x + Math.sin(yaw) * 1.2, z = a.pos.z + Math.cos(yaw) * 1.2;
-      this.gloo.place(x, z, this.world.groundAt(x, z, a.pos.y + 0.6), yaw, skin, a.team);
-    } else this.gloo.throw(from, yaw, skin, a.team);
-    if (a.isPlayer) sfx.click();
+    const block = this.world.raycast(tC.set(a.pos.x, a.pos.y + 1.0, a.pos.z), dir, d + 0.6);
+    if (block < d + 0.6) d = Math.max(1.1, block - 0.6);
+    const x = a.pos.x + dir.x * d, z = a.pos.z + dir.z * d;
+    const audible = a.pos.distanceTo(this.camera.position) < 60;
+    this.gloo.place(x, z, this.world.groundAt(x, z, a.pos.y + 1.2), yaw, skin, a.team, audible);
+    a.rig.kick = 0.6;
   }
 
   private throwNade(a: Actor, dir: THREE.Vector3, power = 17) {
