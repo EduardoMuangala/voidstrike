@@ -50,11 +50,18 @@ const BR_PLAYERS = 48;
 const BASE_NAMES = ['xKiller', 'NinjaAO', 'Sombra77', 'Fénix', 'ReiDoCapim', 'Mamba', 'Kuduro', 'TugaSniper', 'Bala7', 'Jaguar', 'Mito', 'LoboAlfa', 'ProPlayer', 'Zica', 'Raio', 'Pantera', 'Cobra', 'Trovão', 'Kamikaze', 'Ghost', 'Sniperzinho', 'Diamante', 'Bruxo', 'Dread', 'Kiala', 'Muxima', 'Zumbi', 'Nzola', 'Vulcão', 'Tigre', 'Falcão', 'Sobas', 'Kalunga', 'Fantasma', 'Ciclone', 'Neblina', 'Kanzala', 'Bumbo', 'Ritmo', 'Capitão', 'Tsunami', 'Orion', 'Nova', 'Furacão', 'Kwanza', 'Zeus', 'Hydra', 'Sniper99', 'Boladão', 'Malandro'];
 const ABIL_ICON: Record<AbilityId, string> = { dash: '⚡', heal: '✚', shield: '⛨', reveal: '◉', fury: '🔥' };
 const PREF_DIST: Record<WeaponId, number> = { ar: 22, smg: 12, sg: 6, sr: 55, dmr: 40, lmg: 24, pistol: 14 };
+// Only scales how dangerous bots are to the human player — picking "hard" must not
+// also make bots slaughter each other faster, or the 48-player lobby empties out fast.
 const DIFF = {
-  easy: { acc: 0.17, react: 0.75, dmg: 0.55, detect: 0.8, rate: 1.35 },
-  normal: { acc: 0.27, react: 0.48, dmg: 0.75, detect: 1, rate: 1.15 },
-  hard: { acc: 0.38, react: 0.3, dmg: 0.95, detect: 1.2, rate: 1 },
+  easy: { acc: 0.15, react: 0.85, dmg: 0.5, detect: 0.8, rate: 1.4 },
+  normal: { acc: 0.24, react: 0.5, dmg: 0.75, detect: 1, rate: 1.15 },
+  hard: { acc: 0.4, react: 0.16, dmg: 1.05, detect: 1.3, rate: 0.9 },
 };
+const HEAD_CHANCE: Record<Difficulty, number> = { easy: 0.06, normal: 0.12, hard: 0.24 };
+// Fixed baseline for bot-vs-bot fights, independent of the chosen difficulty, so the
+// 48-player population thins out at a believable pace no matter how hard the player set it.
+const BOT_VS_BOT = { acc: 0.13, react: 0.5, dmg: 0.42, rate: 1.3, head: 0.07 };
+const LOW_HP = 38;
 const ZONE_PHASES = [
   { wait: 55, shrink: 40, r: 120, dps: 1.5 },
   { wait: 40, shrink: 30, r: 75, dps: 3 },
@@ -116,6 +123,7 @@ export class Match {
   private onPlane = new Set<Actor>();
   private jumpAt = new Map<Actor, number>();
   private landAt = new Map<Actor, THREE.Vector3>();
+  private poiLanded = new Map<Poi, number>();
   spec: Spectator | null = null;
   replay: Replay | null = null;
   replayOn = false;
@@ -283,16 +291,24 @@ export class Match {
     const pl = this.plane!;
     const land = this.world.pois.filter((p) => p.kind !== 'range');
     let tx: number, tz: number;
-    if (Math.random() < 0.8 && land.length) {
+    // Most bots favour a POI near the flight path, but each already-chosen POI gets
+    // steadily less appealing — otherwise everyone piles onto the one or two spots the
+    // plane happens to fly over, and a third of the lobby dies in the first minute.
+    const cap = Math.max(5, Math.ceil(this.actors.length / Math.max(2, land.length) * 1.3));
+    if (Math.random() < 0.62 && land.length) {
       const weights = land.map((p) => {
+        const crowd = this.poiLanded.get(p) || 0;
+        if (crowd >= cap) return 0;
         const k = pl.progressNear(p.x, p.z);
         const pp = pl.pointAt(k, tA);
-        return 1 / (1 + Math.hypot(pp.x - p.x, pp.z - p.z) / 60);
+        const near = 1 / (1 + Math.hypot(pp.x - p.x, pp.z - p.z) / 60);
+        return near / Math.pow(1 + crowd, 2.4);
       });
       let r = Math.random() * weights.reduce((s, x) => s + x, 0);
       let i = 0;
       while (r > weights[i] && i < weights.length - 1) r -= weights[i++];
       const p = land[i];
+      this.poiLanded.set(p, (this.poiLanded.get(p) || 0) + 1);
       const ang = Math.random() * 6.28, rr = Math.random() * p.r;
       tx = p.x + Math.cos(ang) * rr;
       tz = p.z + Math.sin(ang) * rr;
@@ -301,6 +317,16 @@ export class Match {
       const pp = pl.pointAt(k, tA);
       tx = pp.x + (Math.random() - 0.5) * 120;
       tz = pp.z + (Math.random() - 0.5) * 120;
+    }
+    // whichever branch picked it, never drop straight into an already-crowded POI
+    for (const p of land) {
+      if ((this.poiLanded.get(p) || 0) < cap) continue;
+      const dx = tx - p.x, dz = tz - p.z, dd = Math.hypot(dx, dz);
+      if (dd < p.r + 15) {
+        const push = (p.r + 30) / Math.max(1, dd);
+        tx = p.x + dx * push;
+        tz = p.z + dz * push;
+      }
     }
     const d = Math.hypot(tx, tz);
     if (d > this.world.radius - 25) {
@@ -1410,7 +1436,8 @@ export class Match {
       const dist = Math.hypot(dx, dz) || 1;
       const nx = dx / dist, nz = dz / dist;
       const pref = def ? PREF_DIST[def.id] : 15;
-      const fwd = dist > pref + 5 ? 1 : dist < pref - 5 ? -0.7 : 0;
+      const retreating = b.hp < LOW_HP && b.shieldT <= 0;
+      const fwd = retreating ? -1 : dist > pref + 5 ? 1 : dist < pref - 5 ? -0.7 : 0;
       if (ai.strafeT <= 0) {
         ai.strafe = Math.random() < 0.5 ? -1 : 1;
         ai.strafeT = 0.5 + Math.random() * 1.1;
@@ -1521,7 +1548,10 @@ export class Match {
         ai.visible = true;
         ai.lastSeen.copy(e.pos);
         ai.seenT = 2.5;
-        if (e !== prev) ai.react = (cfg.react * (0.7 + Math.random() * 0.6)) / ai.skill;
+        if (e !== prev) {
+          const rc = e.isPlayer ? cfg : BOT_VS_BOT;
+          ai.react = (rc.react * (0.7 + Math.random() * 0.6)) / ai.skill;
+        }
         break;
       }
     }
@@ -1530,11 +1560,12 @@ export class Match {
     const t = ai.target;
     if (t && ai.visible) {
       const d = b.pos.distanceTo(t.pos);
-      if (b.hp < 50 && b.gel > 0 && ai.gelT <= 0 && Math.random() < 0.55) {
+      const inDanger = b.hp < LOW_HP && b.shieldT <= 0;
+      if ((b.hp < 50 || inDanger) && b.gel > 0 && ai.gelT <= 0 && Math.random() < (inDanger ? 0.85 : 0.55)) {
         this.throwGloo(b, Math.atan2(t.pos.x - b.pos.x, t.pos.z - b.pos.z));
-        ai.gelT = 6;
-        if (b.meds > 0) this.startHeal(b);
+        ai.gelT = inDanger ? 3.5 : 6;
       }
+      if (b.healT <= 0 && b.meds > 0 && b.hp < 48 && Math.random() < 0.45) this.startHeal(b);
       if (b.nades > 0 && d > 9 && d < 26 && Math.random() < 0.035) {
         const dir = tC.set(t.pos.x - b.pos.x, 0, t.pos.z - b.pos.z).normalize();
         dir.y = 0.35;
@@ -1633,7 +1664,7 @@ export class Match {
       return;
     }
     if (b.cd > 0) return;
-    const cfg = DIFF[this.diff];
+    const cfg = t.isPlayer ? DIFF[this.diff] : BOT_VS_BOT;
     b.cd = def.interval * cfg.rate * (b.furyT > 0 ? 0.65 : 1) * (def.auto ? 1 : 1.25);
     w.mag--;
     b.firedT = 1.5;
@@ -1654,10 +1685,9 @@ export class Match {
     for (let i = 0; i < def.pellets; i++) {
       if (Math.random() < acc * (def.pellets > 1 ? 1.3 : 1)) {
         anyHit = true;
-        const head = Math.random() < (this.diff === 'hard' ? 0.2 : 0.12);
+        const head = Math.random() < (t.isPlayer ? HEAD_CHANCE[this.diff] : BOT_VS_BOT.head);
         const fall = dist > def.range * 0.5 ? 0.7 : 1;
-        const botVsBot = t.isPlayer ? 1 : this.mode === 'squad' ? 0.6 : 0.5;
-        this.hurt(t, def.dmg * (head ? def.head : 1) * fall * cfg.dmg * botVsBot, b, head, def.name);
+        this.hurt(t, def.dmg * (head ? def.head : 1) * fall * cfg.dmg, b, head, def.name);
         if (!t.alive) break;
       }
     }
