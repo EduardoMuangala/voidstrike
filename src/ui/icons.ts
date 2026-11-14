@@ -8,6 +8,7 @@ export const GEM = '<svg class="cur" viewBox="0 0 24 24"><path d="M6 3h12l4 6-10
 export const MENU_ICONS: Record<string, string> = {
   store: '<svg viewBox="0 0 24 24"><path d="M4 8h16l-1 12H5z" fill="currentColor"/><path d="M8 8a4 4 0 0 1 8 0" stroke="currentColor" stroke-width="2" fill="none"/></svg>',
   wardrobe: '<svg viewBox="0 0 24 24"><path d="M8 3l4 2 4-2 5 4-3 3-2-1v12H8V9l-2 1-3-3z" fill="currentColor"/></svg>',
+  rooms: '<svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="3" fill="currentColor"/><circle cx="17" cy="9" r="2.4" fill="currentColor" opacity=".7"/><path d="M2 20c0-4 3-6 6-6s6 2 6 6z" fill="currentColor"/><path d="M13 20c.3-3 2-5 4.3-5 2.4 0 4.3 1.8 4.7 5z" fill="currentColor" opacity=".7"/></svg>',
   heroes: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" fill="currentColor"/><path d="M4 21c0-4.5 3.5-7 8-7s8 2.5 8 7z" fill="currentColor"/></svg>',
   arsenal: '<svg viewBox="0 0 24 24"><path d="M2 9h15l2-2h3v4h-3l-1 2h-4l-1 3H9l1-3H6l-2 5H2l1-5H2z" fill="currentColor"/></svg>',
   daily: '<svg viewBox="0 0 24 24"><rect x="3" y="9" width="18" height="12" rx="1" fill="currentColor"/><rect x="2" y="6" width="20" height="4" fill="currentColor"/><path d="M12 6v15" stroke="#111" stroke-width="2"/><path d="M12 6c-2-4-6-3-5 0M12 6c2-4 6-3 5 0" stroke="currentColor" stroke-width="2" fill="none"/></svg>',

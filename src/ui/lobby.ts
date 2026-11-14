@@ -6,6 +6,8 @@ import {
 import { buy, canAfford, grantRewards, owns, profile, resetProfile, save, xpForLevel } from '../save';
 import { sfx, unlockAudio } from '../audio';
 import { signOut } from '../auth';
+import { supabase } from '../supabase';
+import { createRoom, deleteRoom, findRoomByCode, joinRoom, listRooms, subscribeRoomList, type Member, type RoomChannel, type RoomRow } from '../rooms';
 import { CharacterRig } from '../models/character';
 import { glow, mat } from '../models/materials';
 import { COIN, GEM, MENU_ICONS, heroIcon, itemIcon, weaponIcon } from './icons';
@@ -13,7 +15,7 @@ import { esc } from '../game/hud';
 import type { MatchResult } from '../game/match';
 import { BR_MAPS } from '../game/maps';
 
-type Page = 'home' | 'store' | 'wardrobe' | 'heroes' | 'arsenal';
+type Page = 'home' | 'store' | 'wardrobe' | 'heroes' | 'arsenal' | 'rooms';
 type StoreTab = 'heroes' | 'outfits' | 'weapons' | 'gloo';
 
 const DAILY_MS = 20 * 3600 * 1000;
@@ -47,12 +49,21 @@ export class Lobby {
   private sparks: THREE.Points;
   private onPlay: (mode: ModeId, diff: Difficulty) => void;
   private rigKey = '';
+  private authUserId: string | null = null;
+  private roomList: RoomRow[] = [];
+  private roomsBusy = false;
+  private roomsUnsub: (() => void) | null = null;
+  private currentRoom: RoomRow | null = null;
+  private roomChannel: RoomChannel | null = null;
+  private roomMembers: Member[] = [];
+  private roomReady = false;
 
   constructor(root: HTMLElement, onPlay: (mode: ModeId, diff: Difficulty) => void) {
     this.onPlay = onPlay;
     this.el = document.createElement('div');
     this.el.id = 'lobby';
     root.appendChild(this.el);
+    supabase.auth.getUser().then(({ data }) => (this.authUserId = data.user?.id || null));
 
     this.scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x2a1d3a, 1.5));
     const key = new THREE.DirectionalLight(0xffffff, 1.8);
@@ -87,6 +98,7 @@ export class Lobby {
 
     this.el.addEventListener('click', (e) => this.onClick(e));
     this.el.addEventListener('input', (e) => this.onInput(e));
+    this.el.addEventListener('submit', (e) => this.onSubmit(e));
     this.el.addEventListener('pointerdown', (e) => {
       if ((e.target as HTMLElement).closest('#stagehit')) {
         this.dragging = true;
@@ -275,6 +287,7 @@ export class Lobby {
       ['wardrobe', 'GUARDA-ROUPA'],
       ['heroes', 'PERSONAGENS'],
       ['arsenal', 'ARSENAL'],
+      ['rooms', 'SALAS'],
     ];
     return `
       <nav class="lb-menu">
@@ -305,12 +318,13 @@ export class Lobby {
   }
 
   private pageHtml(): string {
-    const titles: Record<Page, string> = { home: '', store: 'LOJA', wardrobe: 'GUARDA-ROUPA', heroes: 'PERSONAGENS', arsenal: 'ARSENAL' };
+    const titles: Record<Page, string> = { home: '', store: 'LOJA', wardrobe: 'GUARDA-ROUPA', heroes: 'PERSONAGENS', arsenal: 'ARSENAL', rooms: 'SALAS' };
     let body = '';
     if (this.page === 'store') body = this.storeHtml();
     else if (this.page === 'wardrobe') body = this.wardrobeHtml();
     else if (this.page === 'heroes') body = this.heroesHtml();
     else if (this.page === 'arsenal') body = this.arsenalHtml();
+    else if (this.page === 'rooms') body = this.roomsHtml();
     return `
       <section class="lb-page">
         <div class="pg-head">
@@ -463,8 +477,61 @@ export class Lobby {
     return `<button class="btn-buy ${canAfford(sk.price) ? '' : 'poor'}" data-a="buyskin">COMPRAR ${priceHtml(sk.price)}</button>`;
   }
 
+  // ---------- rooms
+  private roomsHtml() {
+    if (this.currentRoom) return this.roomDetailHtml(this.currentRoom);
+    const modeName = (id: string) => MODES.find((m) => m.id === id)?.name || id.toUpperCase();
+    const mapName = (id: string) => BR_MAPS.find((m) => m.id === id)?.name || id.toUpperCase();
+    return `
+      <h2 class="sect">CRIAR SALA</h2>
+      <form class="form room-form" id="roomCreateForm">
+        <label>NOME DA SALA<input name="name" maxlength="24" placeholder="SALA DE ${esc(profile.name)}"/></label>
+        <label>MODO<select name="mode">${MODES.filter((m) => m.id !== 'train').map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
+        <label>MAPA<select name="map">${BR_MAPS.map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
+        <label>MÁX. JOGADORES<select name="max">${[4, 8, 16, 48].map((n) => `<option value="${n}">${n}</option>`).join('')}</select></label>
+        <button class="btn-primary" type="submit" ${this.roomsBusy ? 'disabled' : ''}>CRIAR E ENTRAR</button>
+      </form>
+      <h2 class="sect">ENTRAR POR CÓDIGO</h2>
+      <form class="form room-form" id="roomJoinForm">
+        <label>CÓDIGO DA SALA<input name="code" maxlength="5" style="text-transform:uppercase" placeholder="EX: 7K2PX"/></label>
+        <button class="btn-ghost" type="submit" ${this.roomsBusy ? 'disabled' : ''}>ENTRAR NA SALA</button>
+      </form>
+      <h2 class="sect">SALAS ABERTAS · ${this.roomList.length}</h2>
+      <div class="grid">
+        ${this.roomList.length ? this.roomList.map((r) => `
+          <button class="card room-card" data-join="${r.id}">
+            <span class="rbar"></span>
+            <b>${esc(r.name)}</b>
+            <span class="foot">${modeName(r.mode)} · ${mapName(r.map)}</span>
+            <span class="room-code">${r.code}</span>
+          </button>`).join('') : '<p class="tip">Ainda não há salas abertas. Cria a primeira!</p>'}
+      </div>
+    `;
+  }
+
+  private roomDetailHtml(r: RoomRow) {
+    const isHost = r.host_id === this.authUserId;
+    const members = this.roomMembers;
+    return `
+      <h2 class="sect">${esc(r.name)}</h2>
+      <div class="room-code-big">CÓDIGO <b>${r.code}</b></div>
+      <p class="tip">Partilha este código para outras pessoas entrarem na tua sala.</p>
+      <div class="mrow">
+        <button class="btn-ghost" data-a="leave-room">SAIR DA SALA</button>
+        ${isHost ? '<button class="btn-ghost danger" data-a="close-room">FECHAR SALA</button>' : ''}
+        <button class="btn-primary ${this.roomReady ? 'on' : ''}" data-a="toggle-ready">${this.roomReady ? 'PRONTO ✓' : 'MARCAR PRONTO'}</button>
+      </div>
+      <h2 class="sect">JOGADORES NA SALA · ${members.length}</h2>
+      <ul class="room-members">
+        ${members.map((m) => `<li class="${m.ready ? 'ready' : ''}"><b>${esc(m.name)}</b><span>${m.ready ? 'PRONTO' : 'A PREPARAR...'}</span></li>`).join('')}
+      </ul>
+      <p class="tip">A sincronização da partida em tempo real ainda não está ligada — por agora a sala serve para te encontrares com as outras pessoas.</p>
+    `;
+  }
+
   // ------------------------------------------------------------------ events
   private go(page: Page) {
+    if (this.page === 'rooms' && page !== 'rooms') this.leaveRoomsPage();
     this.page = page;
     this.sel = null;
     this.previewHero = null;
@@ -472,7 +539,119 @@ export class Lobby {
     this.previewWeapon = null;
     this.previewGloo = null;
     if (page === 'arsenal') this.previewWeapon = { id: this.arsenalSel, skin: profile.weaponSkins[this.arsenalSel] || 'default' };
+    if (page === 'rooms') this.enterRoomsPage();
     this.render();
+  }
+
+  // ---------- rooms (Supabase: a public `rooms` row per lobby + Realtime Presence for who's inside)
+  private enterRoomsPage() {
+    this.roomsUnsub?.();
+    this.roomsUnsub = subscribeRoomList(() => this.refreshRooms());
+    this.refreshRooms();
+  }
+
+  private leaveRoomsPage() {
+    this.roomsUnsub?.();
+    this.roomsUnsub = null;
+    this.leaveCurrentRoom();
+  }
+
+  private leaveCurrentRoom() {
+    this.roomChannel?.leave();
+    this.roomChannel = null;
+    this.currentRoom = null;
+    this.roomMembers = [];
+    this.roomReady = false;
+  }
+
+  private async refreshRooms() {
+    try {
+      this.roomList = await listRooms();
+    } catch {
+      /* transient network hiccup — keep the last known list */
+    }
+    this.render();
+  }
+
+  private async ensureUserId(): Promise<string | null> {
+    if (!this.authUserId) {
+      const { data } = await supabase.auth.getUser();
+      this.authUserId = data.user?.id || null;
+    }
+    return this.authUserId;
+  }
+
+  private enterRoom(row: RoomRow) {
+    this.currentRoom = row;
+    this.roomReady = false;
+    const uid = this.authUserId!;
+    this.roomChannel = joinRoom(row.id, uid, profile.name, (members) => {
+      this.roomMembers = members;
+      this.render();
+    });
+    this.render();
+  }
+
+  private async createRoomFlow(name: string, mode: string, map: string, maxPlayers: number) {
+    const uid = await this.ensureUserId();
+    if (!uid) return this.toast('Sessão expirada, entra de novo.', true);
+    this.roomsBusy = true;
+    this.render();
+    try {
+      const row = await createRoom(uid, profile.name, name || `SALA DE ${profile.name}`, mode, map, maxPlayers);
+      sfx.buy();
+      this.enterRoom(row);
+    } catch (err) {
+      this.toast(err instanceof Error ? err.message : 'Não foi possível criar a sala.', true);
+    } finally {
+      this.roomsBusy = false;
+      this.render();
+    }
+  }
+
+  private async joinByCode(code: string) {
+    if (!code.trim()) return;
+    const uid = await this.ensureUserId();
+    if (!uid) return this.toast('Sessão expirada, entra de novo.', true);
+    this.roomsBusy = true;
+    this.render();
+    try {
+      const row = await findRoomByCode(code);
+      if (!row) this.toast('Não existe nenhuma sala com esse código.', true);
+      else {
+        sfx.pickup();
+        this.enterRoom(row);
+      }
+    } catch {
+      this.toast('Não foi possível procurar a sala.', true);
+    } finally {
+      this.roomsBusy = false;
+      this.render();
+    }
+  }
+
+  private async joinRoomFlow(id: string) {
+    const row = this.roomList.find((r) => r.id === id);
+    if (!row) return;
+    const uid = await this.ensureUserId();
+    if (!uid) return this.toast('Sessão expirada, entra de novo.', true);
+    sfx.pickup();
+    this.enterRoom(row);
+  }
+
+  private toggleReady() {
+    if (!this.roomChannel) return;
+    this.roomReady = !this.roomReady;
+    this.roomChannel.setReady(this.roomReady);
+    this.render();
+  }
+
+  private async closeRoomFlow() {
+    if (!this.currentRoom) return;
+    const id = this.currentRoom.id;
+    this.leaveCurrentRoom();
+    this.render();
+    await deleteRoom(id);
   }
 
   private preview(id: string) {
@@ -528,7 +707,7 @@ export class Lobby {
   private onClick(e: MouseEvent) {
     unlockAudio();
     const t = e.target as HTMLElement;
-    const b = t.closest<HTMLElement>('[data-a],[data-page],[data-tab],[data-sel],[data-slot],[data-wear],[data-hero],[data-wpn],[data-skin],[data-load],[data-mode],[data-diff],[data-map]');
+    const b = t.closest<HTMLElement>('[data-a],[data-page],[data-tab],[data-sel],[data-slot],[data-wear],[data-hero],[data-wpn],[data-skin],[data-load],[data-mode],[data-diff],[data-map],[data-join]');
     if (!b) return;
     sfx.click();
     const d = b.dataset;
@@ -596,9 +775,17 @@ export class Lobby {
       this.el.querySelectorAll('.diffs button').forEach((c) => c.classList.toggle('on', (c as HTMLElement).dataset.diff === d.diff));
       return;
     }
+    if (d.join) return this.joinRoomFlow(d.join);
     switch (d.a) {
       case 'back':
         return this.go('home');
+      case 'leave-room':
+        this.leaveCurrentRoom();
+        return this.render();
+      case 'close-room':
+        return this.closeRoomFlow();
+      case 'toggle-ready':
+        return this.toggleReady();
       case 'start':
         return this.matchmaking();
       case 'modes':
@@ -659,6 +846,20 @@ export class Lobby {
     if (out) out.textContent = t.value;
     save();
     if (k === 'quality') window.dispatchEvent(new Event('resize'));
+  }
+
+  private onSubmit(e: Event) {
+    const form = e.target as HTMLFormElement;
+    if (form.id !== 'roomCreateForm' && form.id !== 'roomJoinForm') return;
+    e.preventDefault();
+    if (this.roomsBusy) return;
+    sfx.click();
+    const data = new FormData(form);
+    if (form.id === 'roomCreateForm') {
+      this.createRoomFlow(String(data.get('name') || ''), String(data.get('mode') || 'squad'), String(data.get('map') || 'solaris'), Number(data.get('max') || 8));
+    } else {
+      this.joinByCode(String(data.get('code') || ''));
+    }
   }
 
   // ------------------------------------------------------------------ modals
