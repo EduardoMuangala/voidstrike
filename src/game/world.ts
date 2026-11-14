@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Terrain, makeNoise } from './terrain';
 import { MAP_DEFS, type MapId, type MapDef, type Poi } from './maps';
+import { groundMaterial } from './ground';
+import { profile } from '../save';
 
 export function rng(seed: number) {
   let a = seed >>> 0;
@@ -85,6 +87,7 @@ export class World {
   water: THREE.Mesh;
   sky: THREE.Mesh;
   clouds = new THREE.Group();
+  groundColor: HTMLCanvasElement;
 
   constructor(id: MapId, seed: number) {
     this.def = MAP_DEFS[id];
@@ -97,7 +100,10 @@ export class World {
     const hf = this.def.height(this);
     this.terrain = new Terrain(S, this.def.step, hf);
     for (const p of this.pois) p.y = this.terrain.heightAt(p.x, p.z);
-    this.group.add(this.terrain.mesh((x, z, h, s) => this.def.color(this, x, z, h, s)));
+    const res = profile.settings.quality === 'high' ? 2048 : profile.settings.quality === 'medium' ? 1536 : 1024;
+    const gm = this.def.ground(this, res);
+    this.groundColor = gm.color;
+    this.group.add(this.terrain.mesh(groundMaterial(gm.color, gm.mask, S)));
 
     this.water = new THREE.Mesh(new THREE.CircleGeometry(S + 600, 40).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: this.def.sky.water }));
     this.water.position.y = 0;
@@ -405,24 +411,20 @@ export class World {
     const cv = document.createElement('canvas');
     cv.width = cv.height = size;
     const cx = cv.getContext('2d')!;
-    const img = cx.createImageData(size, size);
+    cx.imageSmoothingEnabled = true;
+    cx.drawImage(this.groundColor, 0, 0, size, size);
+    const img = cx.getImageData(0, 0, size, size);
     const S = this.terrain.S;
-    const c = new THREE.Color();
-    const water = new THREE.Color(this.def.sky.water);
+    const wc = new THREE.Color(this.def.sky.water);
+    const wr = (wc.r ** (1 / 2.2)) * 255, wg = (wc.g ** (1 / 2.2)) * 255, wb = (wc.b ** (1 / 2.2)) * 255;
     for (let j = 0; j < size; j++)
       for (let i = 0; i < size; i++) {
-        const x = -S + ((i + 0.5) / size) * S * 2, z = -S + ((j + 0.5) / size) * S * 2;
-        const h = this.terrain.heightAt(x, z);
-        if (h < -0.05) c.copy(water).offsetHSL(0, 0, Math.max(-0.12, h * 0.02));
-        else {
-          c.setHex(this.def.color(this, x, z, h, 0));
-          c.offsetHSL(0, 0, Math.min(0.12, h * 0.006));
-        }
-        const k = (j * size + i) * 4;
-        img.data[k] = (c.r ** (1 / 2.2)) * 255;
-        img.data[k + 1] = (c.g ** (1 / 2.2)) * 255;
-        img.data[k + 2] = (c.b ** (1 / 2.2)) * 255;
-        img.data[k + 3] = 255;
+        const h = this.terrain.heightAt(-S + ((i + 0.5) / size) * S * 2, -S + ((j + 0.5) / size) * S * 2);
+        if (h >= -0.05) continue;
+        const k = (j * size + i) * 4, d = Math.max(0.7, 1 + h * 0.03);
+        img.data[k] = wr * d;
+        img.data[k + 1] = wg * d;
+        img.data[k + 2] = wb * d;
       }
     cx.putImageData(img, 0, 0);
     const k = size / (S * 2);
@@ -441,7 +443,9 @@ export class World {
       const m = o as THREE.Mesh;
       if (m.isMesh) {
         m.geometry.dispose();
-        (m.material as THREE.Material).dispose();
+        const mt = m.material as THREE.Material;
+        (mt.userData.textures as THREE.Texture[] | undefined)?.forEach((t) => t.dispose());
+        mt.dispose();
       }
     });
   }

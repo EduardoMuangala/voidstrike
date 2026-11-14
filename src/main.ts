@@ -9,13 +9,13 @@ const canvas = document.getElementById('scene') as HTMLCanvasElement;
 const ui = document.getElementById('ui')!;
 const loading = document.getElementById('loading')!;
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: profile.settings.quality !== 'low', alpha: true, powerPreference: 'high-performance' });
 renderer.setClearColor(0x000000, 0);
 
 function applySize() {
   const dpr = window.devicePixelRatio || 1;
   const q = profile.settings.quality;
-  const pr = q === 'low' ? Math.min(dpr, 1) * 0.85 : q === 'medium' ? Math.min(dpr, 1.5) : Math.min(dpr, 2);
+  const pr = q === 'low' ? Math.min(dpr, 1.3) : q === 'medium' ? Math.min(dpr, 1.75) : Math.min(dpr, 2);
   renderer.setPixelRatio(pr);
   renderer.setSize(innerWidth, innerHeight, false);
   lobby.onResize();
