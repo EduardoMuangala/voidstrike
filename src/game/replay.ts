@@ -9,7 +9,7 @@ const F = 8;
 
 export const FL = { alive: 1, crouch: 2, glide: 4, dropping: 8, plane: 16, ground: 32 };
 
-export interface Snap { x: number; y: number; z: number; yaw: number; pitch: number; flags: number; weapon: WeaponId | null; hp: number; speed: number }
+export interface Snap { x: number; y: number; z: number; yaw: number; pitch: number; flags: number; weapon: WeaponId | null; hp: number; speed: number; vx: number; vz: number }
 export interface ShotEv { t: number; a: [number, number, number]; b: [number, number, number]; color: number }
 export interface BoomEv { t: number; p: [number, number, number] }
 export interface KillEv { t: number; text: string }
@@ -140,7 +140,9 @@ export class Replay {
     out.weapon = wi >= 0 ? ALL_WEAPON_IDS[wi] : null;
     out.hp = b[src + 7];
     const dtf = this.times[fb] - this.times[fa];
-    out.speed = dtf > 0 ? Math.hypot(b[ob] - b[oa], b[ob + 2] - b[oa + 2]) / dtf : 0;
+    out.vx = dtf > 0 ? (b[ob] - b[oa]) / dtf : 0;
+    out.vz = dtf > 0 ? (b[ob + 2] - b[oa + 2]) / dtf : 0;
+    out.speed = Math.hypot(out.vx, out.vz);
     return out;
   }
 

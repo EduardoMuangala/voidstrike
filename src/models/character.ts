@@ -11,7 +11,11 @@ export interface RigState {
   reload: number;
   glide: boolean;
   dead: boolean;
+  vx?: number;
+  vz?: number;
 }
+
+const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 const shadowGeo = new THREE.CircleGeometry(0.45, 16).rotateX(-Math.PI / 2);
 const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false });
@@ -39,6 +43,13 @@ export class CharacterRig {
   chute: THREE.Group | null = null;
   outfitParts: THREE.Object3D[] = [];
   phase = Math.random() * 6;
+  private amp = 0;
+  private lowerYaw = NaN;
+  private landT = 0;
+  private wasAir = false;
+  private shuffle = 0;
+  /** True on the frame a foot touches the ground. */
+  stepped = false;
   kick = 0;
   crouchT = 0;
   airT = 0;
@@ -366,26 +377,73 @@ export class CharacterRig {
   }
 
   update(dt: number, s: RigState, groundY: number) {
-    const speed = Math.min(1.4, s.speed / 7);
-    this.phase += dt * (4 + s.speed * 1.35);
-    this.crouchT += ((s.crouch ? 1 : 0) - this.crouchT) * Math.min(1, dt * 12);
+    const k = Math.min(1, dt * 12);
+    this.crouchT += ((s.crouch ? 1 : 0) - this.crouchT) * k;
     this.airT += ((s.air || s.glide ? 1 : 0) - this.airT) * Math.min(1, dt * 10);
     this.kick = Math.max(0, this.kick - dt * 9);
+    const cr = this.crouchT, air = this.airT;
+    const yaw = this.root.rotation.y;
 
-    const sw = Math.sin(this.phase);
-    const amp = 0.75 * speed * (1 - this.airT);
-    const cr = this.crouchT;
-    const air = this.airT;
+    // local velocity: forward / right relative to where the character aims
+    const vx = s.vx ?? Math.sin(yaw) * s.speed, vz = s.vz ?? Math.cos(yaw) * s.speed;
+    const fwd = vx * Math.sin(yaw) + vz * Math.cos(yaw);
+    const side = -vx * Math.cos(yaw) + vz * Math.sin(yaw);
+    const moving = s.speed > 0.4 && !s.air;
+    const back = fwd < -0.3;
 
-    this.body.position.y = 0.92 - cr * 0.3 + Math.abs(Math.cos(this.phase)) * 0.05 * speed * (1 - air) + Math.sin(performance.now() * 0.002) * 0.006;
+    // lower body follows the movement direction (or lags when turning on the spot)
+    if (Number.isNaN(this.lowerYaw)) this.lowerYaw = yaw;
+    let target = this.lowerYaw;
+    if (moving) target = yaw + Math.max(-1.0, Math.min(1.0, back ? Math.atan2(-side, -fwd) : Math.atan2(side, Math.max(0.01, fwd))));
+    else if (Math.abs(wrap(this.lowerYaw - yaw)) > 0.7) target = yaw;
+    const before = this.lowerYaw;
+    this.lowerYaw += wrap(target - this.lowerYaw) * Math.min(1, dt * (moving ? 10 : 7));
+    const turning = !moving && Math.abs(wrap(this.lowerYaw - before)) / Math.max(dt, 1e-3) > 1.2;
+    this.shuffle += ((turning ? 1 : 0) - this.shuffle) * Math.min(1, dt * 8);
+    const hip = Math.max(-1.0, Math.min(1.0, wrap(this.lowerYaw - yaw)));
 
-    const thighBase = -1.0 * cr - 0.45 * air;
-    const shinBase = 1.6 * cr + 0.8 * air;
-    this.legL.rotation.x = thighBase + sw * amp;
-    this.legR.rotation.x = thighBase - sw * amp + air * 0.3;
-    this.shinL.rotation.x = shinBase + Math.max(0, -Math.cos(this.phase)) * amp * 1.3;
-    this.shinR.rotation.x = shinBase + Math.max(0, Math.cos(this.phase)) * amp * 1.3 - air * 0.3;
-    this.body.rotation.x = cr * 0.25;
+    // stride-driven cycle so the feet do not slide
+    const run = Math.min(1, s.speed / 6.2);
+    const stride = (1.25 + run * 1.15) * (1 - cr * 0.35);
+    const prev = this.phase;
+    const dir = back ? -1 : 1;
+    if (moving) this.phase += dir * ((s.speed / stride) * Math.PI * 2 * dt);
+    else if (this.shuffle > 0.05) this.phase += dt * 9;
+    const wantAmp = moving ? (0.32 + run * 0.5) * (1 - cr * 0.45) : this.shuffle * 0.22;
+    this.amp += (wantAmp - this.amp) * Math.min(1, dt * 8);
+    const amp = this.amp * (1 - air);
+    this.stepped = moving && Math.floor(prev / Math.PI) !== Math.floor(this.phase / Math.PI);
+
+    // landing dip
+    if (this.wasAir && !s.air && !s.glide) this.landT = 0.28;
+    this.wasAir = s.air || s.glide;
+    this.landT = Math.max(0, this.landT - dt);
+    const land = Math.sin((this.landT / 0.28) * Math.PI) * (this.landT > 0 ? 1 : 0);
+
+    const ph = this.phase;
+    const sw = Math.sin(ph);
+    const bob = Math.abs(Math.cos(ph)) * (0.025 + run * 0.045) * (amp > 0.05 ? 1 : 0);
+    const breathe = Math.sin(performance.now() * 0.0021) * 0.006;
+    this.body.position.y = 0.92 - cr * 0.3 - land * 0.14 - (0.02 + run * 0.03) * (amp > 0.05 ? 1 : 0) + bob + breathe;
+    this.body.position.x = sw * 0.025 * amp;
+
+    // legs: thigh swing + knee flex during the swing phase
+    const thighBase = -1.0 * cr - 0.45 * air - land * 0.5;
+    const shinBase = 1.6 * cr + 0.8 * air + land * 0.9;
+    const knee = 0.55 + run * 0.9;
+    this.legL.rotation.order = this.legR.rotation.order = 'YXZ';
+    this.legL.rotation.x = thighBase - sw * amp;
+    this.legR.rotation.x = thighBase + sw * amp + air * 0.3;
+    this.shinL.rotation.x = shinBase + Math.max(0, Math.cos(ph)) * amp * knee + 0.06;
+    this.shinR.rotation.x = shinBase + Math.max(0, -Math.cos(ph)) * amp * knee + 0.06 - air * 0.3;
+    this.legL.rotation.y = this.legR.rotation.y = hip * 0.35;
+
+    // pelvis turns toward the movement, the upper body counter-rotates to keep aiming
+    this.body.rotation.order = 'YXZ';
+    this.body.rotation.y = hip * 0.65 + sw * 0.07 * amp;
+    this.body.rotation.x = cr * 0.25 + run * 0.06 * (moving ? 1 : 0) * (back ? -0.5 : 1);
+    const lean = moving ? Math.max(-1, Math.min(1, side / 6.2)) : 0;
+    this.body.rotation.z += (-lean * 0.1 - this.body.rotation.z) * Math.min(1, dt * 8);
 
     if (s.glide) {
       this.armL.rotation.set(-2.9, 0, -0.4);
@@ -398,15 +456,19 @@ export class CharacterRig {
       this.pose(this.weaponId === 'pistol' ? 'pistol' : 'rifle');
     }
 
-    this.spine.rotation.x = -s.pitch * 0.55 - cr * 0.2;
-    this.spine.rotation.y = Math.sin(this.phase) * 0.06 * speed;
+    this.spine.rotation.order = 'YXZ';
+    this.spine.rotation.x = -s.pitch * 0.55 - cr * 0.2 - run * 0.05 * (moving ? 1 : 0);
+    this.spine.rotation.y = -hip * 0.65 - sw * 0.1 * amp;
+    this.spine.rotation.z = -this.body.rotation.z * 0.6;
     this.head.rotation.x = -s.pitch * 0.35;
+    this.head.rotation.y = -Math.sin(ph) * 0.04 * amp;
 
     const base = this.mount.userData.base as THREE.Vector3 | undefined;
     if (base) {
-      this.mount.position.set(base.x, base.y + this.kick * 0.02, base.z - this.kick * 0.07);
-      this.mount.rotation.x = -this.kick * 0.25 + (s.reload > 0 ? 0.5 * Math.sin(s.reload * Math.PI) : 0);
-      this.mount.rotation.z = s.reload > 0 ? 0.6 * Math.sin(s.reload * Math.PI) : 0;
+      const wb = Math.sin(ph * 2) * 0.012 * amp, ws = Math.cos(ph) * 0.01 * amp;
+      this.mount.position.set(base.x + ws, base.y + this.kick * 0.02 + wb - land * 0.03, base.z - this.kick * 0.07);
+      this.mount.rotation.x = -this.kick * 0.25 + (s.reload > 0 ? 0.5 * Math.sin(s.reload * Math.PI) : 0) + wb * 2;
+      this.mount.rotation.z = s.reload > 0 ? 0.6 * Math.sin(s.reload * Math.PI) : ws * 2;
     }
 
     this.shadow.position.y = (groundY - this.root.position.y) / this.root.scale.y + 0.03;

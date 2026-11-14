@@ -125,7 +125,7 @@ export class Match {
   private replayA = 0;
   private replayB = 0;
   private replayPrev = 0;
-  private snap: Snap = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, weapon: null, hp: 0, speed: 0 };
+  private snap: Snap = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, weapon: null, hp: 0, speed: 0, vx: 0, vz: 0 };
   private opts: MatchOpts;
   far: number;
   private camDist = 3;
@@ -719,7 +719,7 @@ export class Match {
         rig.setWeapon(s.weapon, slot?.skin || 'default');
       }
       if (alive && rig.root.position.distanceTo(this.camera.position) < this.far)
-        rig.update(sdt, { speed: s.speed, crouch: (s.flags & FL.crouch) !== 0, air: (s.flags & FL.ground) === 0, pitch: s.pitch, reload: 0, glide: dropping, dead: false }, this.world.heightAt(s.x, s.z));
+        rig.update(sdt, { speed: s.speed, crouch: (s.flags & FL.crouch) !== 0, air: (s.flags & FL.ground) === 0, pitch: s.pitch, reload: 0, glide: dropping, dead: false, vx: s.vx, vz: s.vz }, this.world.heightAt(s.x, s.z));
     });
     if (this.plane) {
       const pp = r.planeAt(t);
@@ -821,9 +821,11 @@ export class Match {
     if (p.healT > 0) speed *= 0.4;
     if (p.pos.y < -0.4) speed *= 0.6;
     if (p.dashT <= 0) {
-      const acc = p.onGround ? 16 : 5;
-      p.vel.x += (wx * speed - p.vel.x) * Math.min(1, dt * acc);
-      p.vel.z += (wz * speed - p.vel.z) * Math.min(1, dt * acc);
+      const tx = wx * speed, tz = wz * speed;
+      const speeding = tx * tx + tz * tz > p.vel.x * p.vel.x + p.vel.z * p.vel.z;
+      const acc = p.onGround ? (speeding ? 9 : 13) : 3.5;
+      p.vel.x += (tx - p.vel.x) * Math.min(1, dt * acc);
+      p.vel.z += (tz - p.vel.z) * Math.min(1, dt * acc);
     }
 
     for (let i = 0; i < 3; i++) if (inp.take(`slot${i}` as 'slot0')) this.switchTo(p, i);
@@ -1318,13 +1320,6 @@ export class Match {
     } else a.onGround = false;
 
     a.speedNow = Math.hypot(a.vel.x, a.vel.z);
-    if (a.isPlayer && a.onGround && a.speedNow > 2) {
-      a.stepT -= dt * (a.speedNow / 5);
-      if (a.stepT <= 0) {
-        a.stepT = 0.36;
-        sfx.step();
-      }
-    }
 
     rig.root.position.copy(a.pos);
     rig.root.rotation.y = a.yaw;
@@ -1345,7 +1340,10 @@ export class Match {
         reload: a.reloadT > 0 && w ? 1 - a.reloadT / WEAPONS[w.id].reload : 0,
         glide: a.dropping,
         dead: false,
+        vx: a.vel.x,
+        vz: a.vel.z,
       }, g);
+      if (a.isPlayer && rig.stepped && !this.spec) sfx.step();
     }
   }
 
@@ -1488,7 +1486,7 @@ export class Match {
     const ml = Math.hypot(mx, mz);
     if (ml > 1) speed /= ml;
     if (b.dashT <= 0) {
-      const acc = b.onGround ? 10 : 3;
+      const acc = b.onGround ? 8 : 3;
       b.vel.x += (mx * speed - b.vel.x) * Math.min(1, dt * acc);
       b.vel.z += (mz * speed - b.vel.z) * Math.min(1, dt * acc);
     }
