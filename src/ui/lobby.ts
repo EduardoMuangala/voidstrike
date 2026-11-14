@@ -5,6 +5,7 @@ import {
 } from '../data';
 import { buy, canAfford, grantRewards, owns, profile, resetProfile, save, xpForLevel } from '../save';
 import { sfx, unlockAudio } from '../audio';
+import { signOut } from '../auth';
 import { CharacterRig } from '../models/character';
 import { glow, mat } from '../models/materials';
 import { COIN, GEM, MENU_ICONS, heroIcon, itemIcon, weaponIcon } from './icons';
@@ -727,12 +728,18 @@ export class Lobby {
       <div class="keys">
         <b>PC</b> WASD mover · RATO mirar · CLIQUE disparar · DIREITO zoom · ESPAÇO saltar · C agachar · R recarregar · 1/2/3 armas · E gelo · G granada · H curar · Q habilidade · F apanhar · M mapa · ESC pausa<br><b>OBSERVADOR</b> 1-5 câmaras · ←/→ jogador · R repetição · ESPAÇO/C subir/descer
       </div>
-      <div class="mrow"><button class="btn-ghost danger" id="resetBtn">APAGAR PROGRESSO</button><button class="btn-primary" data-a="close">FECHAR</button></div>
+      <div class="mrow"><button class="btn-ghost danger" id="logoutBtn">SAIR DA CONTA</button><button class="btn-ghost danger" id="resetBtn">APAGAR PROGRESSO</button><button class="btn-primary" data-a="close">FECHAR</button></div>
     `);
     m.querySelector('#resetBtn')!.addEventListener('click', () =>
       this.confirm('APAGAR PROGRESSO', 'Isto apaga nível, moedas e itens comprados. Continuar?', () => {
         resetProfile();
         this.render();
+      }),
+    );
+    m.querySelector('#logoutBtn')!.addEventListener('click', () =>
+      this.confirm('SAIR DA CONTA', 'Vais voltar ao ecrã de login.', async () => {
+        await signOut();
+        location.reload();
       }),
     );
   }

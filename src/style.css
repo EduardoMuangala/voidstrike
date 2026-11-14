@@ -556,3 +556,14 @@ body:not(.ingame) #app {
   .mapsel b { font-size: 22px; }
   .mapsel span { display: none; }
 }
+
+/* ============================================================== AUTH */
+#authscreen { position: absolute; inset: 0; display: grid; place-items: center; z-index: 30; overflow: hidden; }
+.auth-box { position: relative; width: min(380px, calc(100% - 32px)); display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 28px 24px; background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--acc); backdrop-filter: blur(6px); }
+.auth-logo { font-family: var(--head); font-size: 40px; letter-spacing: 6px; color: var(--acc); line-height: 1; }
+.auth-tabs { width: 100%; justify-content: center; }
+.auth-tabs .tab { flex: 1; text-align: center; }
+#authForm { width: 100%; }
+#authForm .btn-primary.big { width: 100%; margin-top: 4px; }
+.auth-msg { min-height: 16px; font-size: 13px; color: var(--green); text-align: center; }
+.auth-msg.bad { color: var(--red); }

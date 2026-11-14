@@ -1,6 +1,8 @@
 import './style.css';
 import * as THREE from 'three';
 import { profile } from './save';
+import { getSession } from './auth';
+import { AuthScreen } from './ui/auth';
 import { Lobby } from './ui/lobby';
 import { Match } from './game/match';
 import type { Difficulty, ModeId } from './data';
@@ -12,41 +14,45 @@ const loading = document.getElementById('loading')!;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: profile.settings.quality !== 'low', alpha: true, powerPreference: 'high-performance' });
 renderer.setClearColor(0x000000, 0);
 
+let lobby: Lobby | null = null;
+let match: Match | null = null;
+
 function applySize() {
   const dpr = window.devicePixelRatio || 1;
   const q = profile.settings.quality;
   const pr = q === 'low' ? Math.min(dpr, 1.3) : q === 'medium' ? Math.min(dpr, 1.75) : Math.min(dpr, 2);
   renderer.setPixelRatio(pr);
   renderer.setSize(innerWidth, innerHeight, false);
-  lobby.onResize();
+  lobby?.onResize();
   match?.onResize();
 }
 
-let match: Match | null = null;
-
-const lobby = new Lobby(ui, (mode: ModeId, diff: Difficulty) => {
-  loading.classList.add('show');
-  setTimeout(() => {
-    match = new Match({
-      mode,
-      difficulty: diff,
-      map: profile.map,
-      renderer,
-      canvas,
-      root: ui,
-      onEnd: (r) => {
-        match?.dispose();
-        match = null;
-        document.body.classList.remove('ingame');
-        lobby.show(true);
-        lobby.showResult(r);
-      },
-    });
-    lobby.show(false);
-    document.body.classList.add('ingame');
-    loading.classList.remove('show');
-  }, 60);
-});
+function boot() {
+  lobby = new Lobby(ui, (mode: ModeId, diff: Difficulty) => {
+    loading.classList.add('show');
+    setTimeout(() => {
+      match = new Match({
+        mode,
+        difficulty: diff,
+        map: profile.map,
+        renderer,
+        canvas,
+        root: ui,
+        onEnd: (r) => {
+          match?.dispose();
+          match = null;
+          document.body.classList.remove('ingame');
+          lobby?.show(true);
+          lobby?.showResult(r);
+        },
+      });
+      lobby?.show(false);
+      document.body.classList.add('ingame');
+      loading.classList.remove('show');
+    }, 60);
+  });
+  applySize();
+}
 
 addEventListener('resize', applySize);
 document.addEventListener('visibilitychange', () => {
@@ -62,9 +68,14 @@ function frame(now: number) {
   if (match) {
     match.update(dt);
     if (match) match.render();
-  } else {
+  } else if (lobby) {
     lobby.update(dt);
     renderer.render(lobby.scene, lobby.camera);
   }
 }
 requestAnimationFrame(frame);
+
+getSession().then((session) => {
+  if (session) boot();
+  else new AuthScreen(ui, boot);
+});
