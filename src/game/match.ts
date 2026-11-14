@@ -7,6 +7,10 @@ import { weaponMesh } from '../models/weapon';
 import { Actor, RADIUS } from './actor';
 import { World, type Wall } from './world';
 import type { MapId, Poi } from './maps';
+import type { RoomNet } from '../webrtc';
+import type { NetInputMsg } from '../netproto';
+import { netSnap, netShot, netBoom, netKill, netEnd } from '../netproto';
+import type { NetActorSnap } from '../netproto';
 import { Fx } from './fx';
 import { Hud, esc } from './hud';
 import { Input } from './input';
@@ -37,7 +41,12 @@ export interface MatchOpts {
   canvas: HTMLCanvasElement;
   root: HTMLElement;
   onEnd: (r: MatchResult) => void;
+  /** Room play: a real human occupies this actor instead of a bot, driven by messages over net. */
+  net?: RoomNet;
+  netPlayers?: { id: string; name: string }[];
+  seed?: number;
 }
+
 
 type LootKind = 'weapon' | 'med' | 'armor' | 'gel' | 'nade';
 interface Loot { kind: LootKind; wid?: WeaponId; n: number; obj: THREE.Group; pos: THREE.Vector3; alive: boolean; spin: number }
@@ -82,6 +91,7 @@ const ringGeo = new THREE.RingGeometry(0.45, 0.6, 20).rotateX(-Math.PI / 2);
 
 const pick = <T>(a: T[]) => a[(Math.random() * a.length) | 0];
 const angDiff = (a: number, b: number) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+const netFwd = (yaw: number, pitch: number, out: THREE.Vector3) => out.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
 
 function randomOutfit(): Outfit {
   const o = {} as Outfit;
@@ -135,6 +145,10 @@ export class Match {
   private replayPrev = 0;
   private snap: Snap = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, flags: 0, weapon: null, hp: 0, speed: 0, vx: 0, vz: 0 };
   private opts: MatchOpts;
+  private net: RoomNet | null = null;
+  private netInputs = new Map<string, NetInputMsg>();
+  private netActorByPeer = new Map<string, Actor>();
+  private netAcc = 0;
   far: number;
   private camDist = 3;
   private shake = 0;
@@ -172,7 +186,9 @@ export class Match {
     this.camera.rotation.order = 'YXZ';
 
     const mapId: MapId = this.mode === 'train' ? 'range' : opts.map;
-    this.world = new World(mapId, (Math.random() * 1e9) | 0);
+    this.world = new World(mapId, opts.seed ?? ((Math.random() * 1e9) | 0));
+    this.net = opts.net || null;
+    if (this.net) this.net.onMessage = (from, data) => this.onNetMessage(from, data as NetInputMsg);
     const sky = this.world.def.sky;
     this.scene.fog = new THREE.Fog(sky.fog, 30, this.far);
     this.scene.add(new THREE.HemisphereLight(sky.hemiSky, sky.hemiGround, sky.hemiInt));
@@ -233,7 +249,16 @@ export class Match {
       }
     } else if (this.mode === 'squad') {
       this.setupArena();
-      for (let i = 0; i < 3; i++) mkBot(0);
+      const netPlayers = opts.netPlayers || [];
+      const allySlots = 3;
+      for (let i = 0; i < Math.min(netPlayers.length, allySlots); i++) {
+        const peer = netPlayers[i];
+        const a = new Actor(this.actors.length, peer.name, 0, pick(HEROES).id, randomOutfit());
+        a.netId = peer.id;
+        this.actors.push(a);
+        this.netActorByPeer.set(peer.id, a);
+      }
+      for (let i = netPlayers.length; i < allySlots; i++) mkBot(0);
       for (let i = 0; i < 4; i++) mkBot(1);
       for (const a of this.actors) {
         if (a.isPlayer) {
@@ -269,7 +294,10 @@ export class Match {
     }
     if (this.mode !== 'train') {
       this.replay = new Replay(this.actors.length);
-      this.gloo.onEvent = (e) => this.replay?.gloo(this.time, e);
+      this.gloo.onEvent = (e) => {
+        this.replay?.gloo(this.time, e);
+        this.net?.broadcast({ t: 'gloo', ...e });
+      };
     }
 
     this.miniBase = this.world.paintMap(this.mode === 'train' ? 256 : 512);
@@ -552,7 +580,8 @@ export class Match {
     else this.input.take('jump');
     for (const a of this.actors) {
       if (this.onPlane.has(a)) continue;
-      if (!a.isPlayer) this.updateBot(a, dt);
+      if (a.netId) this.updateNetActor(a, dt);
+      else if (!a.isPlayer) this.updateBot(a, dt);
       this.updateActor(a, dt);
     }
     this.updateLoot(dt);
@@ -566,6 +595,7 @@ export class Match {
     this.world.clouds.position.x = Math.sin(this.time * 0.01) * 30;
     this.updateHud(dt);
     this.replay?.record(dt, this.time, this.actors, this.plane && !this.plane.done ? this.plane.pos : null, (a) => this.onPlane.has(a));
+    if (this.net) this.broadcastNet(dt);
 
     if (this.endT >= 0) {
       this.endT -= dt;
@@ -592,7 +622,9 @@ export class Match {
 
   quit() {
     this.setPaused(false);
-    this.finish({ ...(this.result || this.makeResult(false)), quit: true });
+    const r = { ...(this.result || this.makeResult(false)), quit: true };
+    if (this.net && !this.over) this.net.broadcast(netEnd(r));
+    this.finish(r);
   }
 
   private makeResult(win: boolean): MatchResult {
@@ -617,6 +649,7 @@ export class Match {
     this.over = true;
     if (!this.result) this.result = this.makeResult(win);
     if (winner) this.result.winner = winner.name;
+    this.net?.broadcast(netEnd(this.result));
     this.endT = this.spec ? 5 : win ? 3 : 2.4;
     if (this.spec || this.mode === 'watch') {
       this.hud.banner('BOOYAH!', winner ? `CAMPEÃO: ${winner.name}` : 'Fim da partida', 4.5);
@@ -1009,6 +1042,7 @@ export class Match {
     if (tracer) {
       this.fx.tracer(muzzle, hit, 0xffe28a);
       this.replay?.shot(this.time, muzzle, hit, 0xffe28a);
+      this.net?.broadcast(netShot(muzzle, hit));
     }
     if (victim) {
       const dist = s.pos.distanceTo(victim.pos);
@@ -1019,6 +1053,118 @@ export class Match {
       if (wall && best === tw) this.gloo.damage(wall, def.dmg);
       this.fx.burst(hit, wall && best === tw ? 0xbff3ff : 0xd8c8a8, 3, 2.5, 0.06);
     }
+  }
+
+  // =============================================================== networked players (room host side)
+  private onNetMessage(from: string, data: NetInputMsg) {
+    if (data.t === 'input') this.netInputs.set(from, data);
+  }
+
+  private updateNetActor(a: Actor, dt: number) {
+    const net = a.netId ? this.netInputs.get(a.netId) : null;
+    if (!net) return;
+    a.yaw = net.yaw;
+    a.pitch = THREE.MathUtils.clamp(net.pitch, -1.25, 1.15);
+    if (!a.alive || this.over) {
+      a.vel.x *= 0.9;
+      a.vel.z *= 0.9;
+      return;
+    }
+    const w = a.weapon;
+    const def = w ? WEAPONS[w.id] : null;
+    const fx = Math.sin(a.yaw), fz = Math.cos(a.yaw);
+    const rx = -fz, rz = fx;
+    const wx = fx * net.my + rx * net.mx, wz = fz * net.my + rz * net.mx;
+    if (net.jump) a.crouch = false;
+    if (net.jump && a.onGround) a.vel.y = JUMP;
+    a.crouch = net.crouch && a.onGround;
+    let speed = SPEED * (def ? def.moveMul : 1);
+    if (a.crouch) speed *= 0.45;
+    if (net.ads) speed *= 0.65;
+    if (a.furyT > 0) speed *= 1.2;
+    if (a.healT > 0) speed *= 0.4;
+    if (a.dashT <= 0) {
+      const tx = wx * speed, tz = wz * speed;
+      const acc = a.onGround ? 11 : 3.5;
+      a.vel.x += (tx - a.vel.x) * Math.min(1, dt * acc);
+      a.vel.z += (tz - a.vel.z) * Math.min(1, dt * acc);
+    }
+    if (net.slot >= 0 && net.slot <= 2) this.switchTo(a, net.slot);
+    if (net.reload) this.startReload(a);
+    if (a.glooCd <= 0 && net.gel) this.throwGloo(a, a.yaw);
+    if (net.nade) this.throwNade(a, netFwd(a.yaw, a.pitch, tA));
+    if (net.heal) this.startHeal(a);
+    if (net.ability) this.useAbility(a);
+    if (net.fire) {
+      if (a.healT > 0) a.healT = 0;
+      this.netShoot(a, net.ads);
+    } else a.semiLatch = false;
+
+    if (net.pickup) {
+      for (const l of this.loot) {
+        if (!l.alive) continue;
+        const dx = l.pos.x - a.pos.x, dz = l.pos.z - a.pos.z;
+        if (Math.abs(dx) > 2 || Math.abs(dz) > 2 || Math.abs(l.pos.y - a.pos.y) > 1.6) continue;
+        const d = Math.hypot(dx, dz);
+        if (l.kind !== 'weapon') {
+          if (d < 1.5) this.takeItem(a, l);
+        } else if (d < 2) this.takeWeapon(a, l);
+      }
+    }
+  }
+
+  private netShoot(a: Actor, ads: boolean) {
+    const w = a.weapon;
+    if (!w || a.dropping || !a.alive) return;
+    const def = WEAPONS[w.id];
+    if (a.reloadT > 0) return;
+    if (w.mag <= 0) {
+      a.semiLatch = true;
+      this.startReload(a);
+      return;
+    }
+    if (a.cd > 0) return;
+    if (!def.auto && a.semiLatch) return;
+    a.semiLatch = true;
+    a.cd = def.interval * (a.furyT > 0 ? 0.65 : 1);
+    w.mag--;
+    const muzzle = a.rig.muzzleWorld(tD).clone();
+    const fwd = netFwd(a.yaw, a.pitch, tC);
+    const spread = (ads ? def.adsSpread : def.spread) * (a.crouch ? 0.7 : 1) * (a.onGround ? 1 : 1.8);
+    for (let i = 0; i < def.pellets; i++) {
+      const d = fwd.clone();
+      if (spread > 0) {
+        d.x += (Math.random() - 0.5) * 2 * spread;
+        d.y += (Math.random() - 0.5) * 2 * spread;
+        d.z += (Math.random() - 0.5) * 2 * spread;
+        d.normalize();
+      }
+      this.fireRay(a, muzzle, d, def, 0, muzzle, i === 0 || i % 3 === 0);
+    }
+    a.rig.kick = 1;
+    a.firedT = 1.5;
+    this.fx.flash(muzzle, fwd, w.id === 'sg' || w.id === 'sr' ? 1.4 : 1);
+    const dc = muzzle.distanceTo(this.camera.position);
+    if (dc < this.far) sfx.shot(w.id, Math.max(0.1, 1 - dc / this.far) * 0.8);
+    if (w.mag === 0) setTimeout(() => this.startReload(a), 220);
+  }
+
+  private broadcastNet(dt: number) {
+    this.netAcc += dt;
+    if (this.netAcc < 1 / 15) return;
+    this.netAcc = 0;
+    const actors: NetActorSnap[] = [];
+    for (const a of this.actors) {
+      if (this.onPlane.has(a)) continue;
+      actors.push({
+        id: a.id, name: a.name, team: a.team, x: a.pos.x, y: a.pos.y, z: a.pos.z, yaw: a.yaw, pitch: a.pitch,
+        hp: a.hp, armor: a.armor, alive: a.alive, weapon: a.weapon?.id ?? null, mag: a.weapon?.mag ?? 0,
+        slots: a.slots.map((s) => (s ? { id: s.id, mag: s.mag } : null)), cur: a.cur, reloading: a.reloadT > 0,
+        meds: a.meds, gel: a.gel, nades: a.nades,
+        crouch: a.crouch, onGround: a.onGround, dropping: a.dropping, glide: a.glide, speed: a.speedNow, vx: a.vel.x, vz: a.vel.z,
+      });
+    }
+    this.net!.broadcast(netSnap(this.time, actors));
   }
 
   // =============================================================== shared actions
@@ -1223,6 +1369,7 @@ export class Match {
     const allyRel = v.team === p.team ? -1 : by && by.team === p.team ? 1 : 0;
     this.hud.kill(by ? by.name : 'ZONA', v.name, label, head, v.isPlayer || !!by?.isPlayer, this.mode === 'squad' ? allyRel : 0);
     this.replay?.kill(this.time, `${by ? by.name : 'ZONA'}|${label}|${v.name}`);
+    this.net?.broadcast(netKill(by ? by.name : 'ZONA', v.name, label));
     this.fx.burst(v.chestPos(tA), 0xff3b3b, 14, 4, 0.1);
     if (by?.isPlayer && v !== by) {
       sfx.kill();
@@ -1754,6 +1901,7 @@ export class Match {
     const R = 6.5;
     this.fx.blast(n.pos, R * 0.7);
     this.replay?.boom(this.time, n.pos);
+    this.net?.broadcast(netBoom(n.pos));
     const dc = n.pos.distanceTo(this.camera.position);
     if (dc < 80) sfx.boom();
     if (dc < 20) this.shake = Math.max(this.shake, 1.2 * (1 - dc / 20));

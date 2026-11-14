@@ -138,6 +138,16 @@ export class RoomNet {
     for (const link of this.links.values()) if (link.dc?.readyState === 'open') link.dc.send(JSON.stringify(data));
   }
 
+  /** Send to one specific peer only (the host talking to one guest, or a guest talking to the host). */
+  sendTo(peerId: string, data: unknown) {
+    const link = this.links.get(peerId);
+    if (link?.dc?.readyState === 'open') link.dc.send(JSON.stringify(data));
+  }
+
+  isConnectedTo(peerId: string) {
+    return this.links.get(peerId)?.status === 'connected';
+  }
+
   private notify() {
     this.onUpdate(Array.from(this.links.entries()).map(([id, l]) => ({ id, status: l.status, ping: l.ping })));
   }
