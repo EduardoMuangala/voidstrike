@@ -9,6 +9,17 @@ import { signOut } from '../auth';
 import { supabase } from '../supabase';
 import { createRoom, deleteRoom, findRoomByCode, joinRoom, listRooms, subscribeRoomList, type Member, type RoomChannel, type RoomRow } from '../rooms';
 import { RoomNet, type PeerLink } from '../webrtc';
+import type { MapId } from '../game/maps';
+
+export interface NetPlayOpts {
+  isHost: boolean;
+  net: RoomNet;
+  map: MapId;
+  seed: number;
+  hostId: string;
+  netPlayers?: { id: string; name: string }[];
+  selfActorId?: number;
+}
 import { CharacterRig } from '../models/character';
 import { glow, mat } from '../models/materials';
 import { COIN, GEM, MENU_ICONS, heroIcon, itemIcon, weaponIcon } from './icons';
@@ -49,6 +60,7 @@ export class Lobby {
   private camZ = 6.3;
   private sparks: THREE.Points;
   private onPlay: (mode: ModeId, diff: Difficulty) => void;
+  private onNetPlay: (opts: NetPlayOpts) => void;
   private rigKey = '';
   private authUserId: string | null = null;
   private roomList: RoomRow[] = [];
@@ -61,8 +73,9 @@ export class Lobby {
   private net: RoomNet | null = null;
   private netPeers: PeerLink[] = [];
 
-  constructor(root: HTMLElement, onPlay: (mode: ModeId, diff: Difficulty) => void) {
+  constructor(root: HTMLElement, onPlay: (mode: ModeId, diff: Difficulty) => void, onNetPlay: (opts: NetPlayOpts) => void) {
     this.onPlay = onPlay;
+    this.onNetPlay = onNetPlay;
     this.el = document.createElement('div');
     this.el.id = 'lobby';
     root.appendChild(this.el);
@@ -489,7 +502,7 @@ export class Lobby {
       <h2 class="sect">CRIAR SALA</h2>
       <form class="form room-form" id="roomCreateForm">
         <label>NOME DA SALA<input name="name" maxlength="24" placeholder="SALA DE ${esc(profile.name)}"/></label>
-        <label>MODO<select name="mode">${MODES.filter((m) => m.id !== 'train').map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
+        <label>MODO<select name="mode">${MODES.filter((m) => m.id === 'squad').map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
         <label>MAPA<select name="map">${BR_MAPS.map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
         <label>MÁX. JOGADORES<select name="max">${[4, 8, 16, 48].map((n) => `<option value="${n}">${n}</option>`).join('')}</select></label>
         <button class="btn-primary" type="submit" ${this.roomsBusy ? 'disabled' : ''}>CRIAR E ENTRAR</button>
@@ -533,6 +546,7 @@ export class Lobby {
         <button class="btn-ghost" data-a="leave-room">SAIR DA SALA</button>
         ${isHost ? '<button class="btn-ghost danger" data-a="close-room">FECHAR SALA</button>' : ''}
         <button class="btn-primary ${this.roomReady ? 'on' : ''}" data-a="toggle-ready">${this.roomReady ? 'PRONTO ✓' : 'MARCAR PRONTO'}</button>
+        ${isHost ? '<button class="btn-primary" data-a="start-room-match">INICIAR PARTIDA</button>' : ''}
       </div>
       <h2 class="sect">JOGADORES NA SALA · ${members.length}</h2>
       <ul class="room-members">
@@ -610,6 +624,7 @@ export class Lobby {
       this.netPeers = peers;
       this.render();
     };
+    this.net.onMessage = (_from, data) => this.onRoomNetMessage(data as { t: string; seed: number; map: MapId; you: number });
     this.render();
   }
 
@@ -658,6 +673,27 @@ export class Lobby {
     if (!uid) return this.toast('Sessão expirada, entra de novo.', true);
     sfx.pickup();
     this.enterRoom(row);
+  }
+
+  /** Called after a room match ends: Match/NetMatch had taken over net.onMessage. */
+  reclaimRoomNet() {
+    if (!this.net) return;
+    this.net.onMessage = (_from, data) => this.onRoomNetMessage(data as { t: string; seed: number; map: MapId; you: number });
+  }
+
+  private onRoomNetMessage(data: { t: string; seed: number; map: MapId; you: number }) {
+    if (data.t !== 'start' || !this.currentRoom || !this.net) return;
+    this.onNetPlay({ isHost: false, net: this.net, map: data.map, seed: data.seed, hostId: this.currentRoom.host_id, selfActorId: data.you });
+  }
+
+  private startRoomMatch() {
+    if (!this.currentRoom || !this.net || !this.authUserId) return;
+    const seed = (Math.random() * 1e9) | 0;
+    const others = this.roomMembers.filter((m) => m.key !== this.authUserId).map((m) => ({ id: m.key, name: m.name }));
+    const map = this.currentRoom.map as MapId;
+    others.forEach((o, i) => this.net!.sendTo(o.id, { t: 'start', seed, map, you: i + 1 }));
+    sfx.buy();
+    this.onNetPlay({ isHost: true, net: this.net, map, seed, hostId: this.authUserId, netPlayers: others });
   }
 
   private toggleReady() {
@@ -807,6 +843,8 @@ export class Lobby {
         return this.closeRoomFlow();
       case 'toggle-ready':
         return this.toggleReady();
+      case 'start-room-match':
+        return this.startRoomMatch();
       case 'start':
         return this.matchmaking();
       case 'modes':

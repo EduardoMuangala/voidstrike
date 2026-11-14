@@ -75,6 +75,9 @@ export class Actor {
   seen = false;
   seenT = 0;
   aura: THREE.Mesh | null = null;
+  /** Non-null for an actor controlled by a remote human over WebRTC (its RoomNet peer id). */
+  netId: string | null = null;
+  semiLatch = false;
 
   id: number;
   name: string;

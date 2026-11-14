@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { profile } from './save';
 import { getSession } from './auth';
 import { AuthScreen } from './ui/auth';
-import { Lobby } from './ui/lobby';
+import { Lobby, type NetPlayOpts } from './ui/lobby';
 import { Match } from './game/match';
+import { NetMatch } from './game/netclient';
 import type { Difficulty, ModeId } from './data';
 
 const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -16,6 +17,7 @@ renderer.setClearColor(0x000000, 0);
 
 let lobby: Lobby | null = null;
 let match: Match | null = null;
+let netMatch: NetMatch | null = null;
 
 function applySize() {
   const dpr = window.devicePixelRatio || 1;
@@ -25,32 +27,88 @@ function applySize() {
   renderer.setSize(innerWidth, innerHeight, false);
   lobby?.onResize();
   match?.onResize();
+  netMatch?.onResize();
 }
 
-function boot() {
-  lobby = new Lobby(ui, (mode: ModeId, diff: Difficulty) => {
-    loading.classList.add('show');
-    setTimeout(() => {
+function backToLobby() {
+  document.body.classList.remove('ingame');
+  lobby?.reclaimRoomNet();
+  lobby?.show(true);
+}
+
+function startRoomMatch(opts: NetPlayOpts) {
+  loading.classList.add('show');
+  setTimeout(() => {
+    if (opts.isHost) {
       match = new Match({
-        mode,
-        difficulty: diff,
-        map: profile.map,
+        mode: 'squad',
+        difficulty: profile.difficulty,
+        map: opts.map,
+        seed: opts.seed,
+        net: opts.net,
+        netPlayers: opts.netPlayers,
         renderer,
         canvas,
         root: ui,
         onEnd: (r) => {
           match?.dispose();
           match = null;
-          document.body.classList.remove('ingame');
-          lobby?.show(true);
+          backToLobby();
           lobby?.showResult(r);
         },
       });
-      lobby?.show(false);
-      document.body.classList.add('ingame');
-      loading.classList.remove('show');
-    }, 60);
-  });
+    } else {
+      netMatch = new NetMatch({
+        renderer,
+        canvas,
+        root: ui,
+        net: opts.net,
+        map: opts.map,
+        seed: opts.seed,
+        hostId: opts.hostId,
+        selfActorId: opts.selfActorId!,
+        onEnd: (r) => {
+          netMatch?.dispose();
+          netMatch = null;
+          backToLobby();
+          lobby?.showResult(r);
+        },
+      });
+    }
+    lobby?.show(false);
+    document.body.classList.add('ingame');
+    loading.classList.remove('show');
+  }, 60);
+}
+
+function boot() {
+  lobby = new Lobby(
+    ui,
+    (mode: ModeId, diff: Difficulty) => {
+      loading.classList.add('show');
+      setTimeout(() => {
+        match = new Match({
+          mode,
+          difficulty: diff,
+          map: profile.map,
+          renderer,
+          canvas,
+          root: ui,
+          onEnd: (r) => {
+            match?.dispose();
+            match = null;
+            document.body.classList.remove('ingame');
+            lobby?.show(true);
+            lobby?.showResult(r);
+          },
+        });
+        lobby?.show(false);
+        document.body.classList.add('ingame');
+        loading.classList.remove('show');
+      }, 60);
+    },
+    startRoomMatch,
+  );
   applySize();
 }
 
@@ -68,6 +126,9 @@ function frame(now: number) {
   if (match) {
     match.update(dt);
     if (match) match.render();
+  } else if (netMatch) {
+    netMatch.update(dt);
+    netMatch.render();
   } else if (lobby) {
     lobby.update(dt);
     renderer.render(lobby.scene, lobby.camera);
