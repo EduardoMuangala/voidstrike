@@ -11,12 +11,11 @@ const SPAN = 1.3;
 const HGT = 2.5;
 const THK = 0.5;
 const SEG_W = 2 * RAD * Math.sin(SPAN / (2 * SEGS)) + 0.14;
-const GROW = 0.2;
+const GROW = 0.12;
 export const GLOO_HP = 300;
 
 interface Seg { body: THREE.Mesh; cap: THREE.Mesh; wall: Wall | null; delay: number; x: number; y: number; z: number; yaw: number; hs: number }
 export interface GlooGroup { id: number; hp: number; segs: Seg[]; life: number; skin: string; x: number; y: number; z: number; yaw: number; age: number; dying: number; ownerTeam: number }
-interface Can { mesh: THREE.Mesh; pos: THREE.Vector3; vel: THREE.Vector3; yaw: number; skin: string; t: number; team: number }
 export interface GlooEvent { kind: 'spawn' | 'end'; id: number; x: number; y: number; z: number; yaw: number; skin: string }
 
 const tmp = new THREE.Vector3();
@@ -27,14 +26,12 @@ const backOut = (t: number) => {
 
 export class Gloo {
   groups: GlooGroup[] = [];
-  private cans: Can[] = [];
   private scene: THREE.Scene;
   private world: World;
   private fx: Fx;
   private seq = 0;
   private bodyGeo: THREE.BufferGeometry;
   private capGeo: THREE.BufferGeometry;
-  private canGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.34, 8);
   private mats = new Map<string, { body: THREE.Material; cap: THREE.Material }>();
   private ghosts = new Map<number, THREE.Group>();
   onEvent: ((e: GlooEvent) => void) | null = null;
@@ -68,15 +65,6 @@ export class Gloo {
     return (GLOO_SKINS.find((x) => x.id === skin) || GLOO_SKINS[0]).body;
   }
 
-  /** Throw a canister; the wall deploys where it lands, curving around the thrower. */
-  throw(from: THREE.Vector3, yaw: number, skin: string, team: number) {
-    const mesh = new THREE.Mesh(this.canGeo, this.mat(skin).cap);
-    mesh.position.copy(from);
-    this.scene.add(mesh);
-    const vel = new THREE.Vector3(Math.sin(yaw) * 8, 3.4, Math.cos(yaw) * 8);
-    this.cans.push({ mesh, pos: from.clone(), vel, yaw, skin, t: 0, team });
-  }
-
   private deploy(x: number, z: number, y: number, yaw: number, skin: string, team: number, id = ++this.seq, silent = false): GlooGroup {
     const g: GlooGroup = { id, hp: GLOO_HP, segs: [], life: 25, skin, x, y, z, yaw, age: 0, dying: 0, ownerTeam: team };
     const ox = x - Math.sin(yaw) * RAD, oz = z - Math.cos(yaw) * RAD;
@@ -95,7 +83,7 @@ export class Gloo {
         this.scene.add(o);
       }
       const wall = this.world.addWall(sx, sy - 0.3, sz, yaw + a, SEG_W / 2, THK / 2, HGT * hs + 0.3, g);
-      g.segs.push({ body, cap, wall, delay: Math.abs(i - (SEGS - 1) / 2) * 0.035, x: sx, y: sy, z: sz, yaw: yaw + a, hs });
+      g.segs.push({ body, cap, wall, delay: Math.abs(i - (SEGS - 1) / 2) * 0.012, x: sx, y: sy, z: sz, yaw: yaw + a, hs });
     }
     this.groups.push(g);
     if (!silent) {
@@ -105,9 +93,9 @@ export class Gloo {
     return g;
   }
 
-  /** Deploy immediately in front of an actor (used when no space to throw). */
-  place(x: number, z: number, y: number, yaw: number, skin: string, team: number) {
-    sfx.gel();
+  /** Free Fire style quick gloo: the wall pops up instantly where the thrower aims. */
+  place(x: number, z: number, y: number, yaw: number, skin: string, team: number, audible = true) {
+    if (audible) sfx.gel();
     return this.deploy(x, z, y, yaw, skin, team);
   }
 
@@ -138,26 +126,7 @@ export class Gloo {
     this.onEvent?.({ kind: 'end', id: g.id, x: g.x, y: g.y, z: g.z, yaw: g.yaw, skin: g.skin });
   }
 
-  update(dt: number, camPos: THREE.Vector3) {
-    for (let i = this.cans.length - 1; i >= 0; i--) {
-      const c = this.cans[i];
-      c.t += dt;
-      c.vel.y -= 22 * dt;
-      const step = c.vel.length() * dt;
-      tmp.copy(c.vel).normalize();
-      const hit = this.world.raycast(c.pos, tmp, step + 0.2) < step + 0.2;
-      c.pos.addScaledVector(c.vel, dt);
-      c.mesh.position.copy(c.pos);
-      c.mesh.rotation.x += dt * 14;
-      const gy = this.world.groundAt(c.pos.x, c.pos.z, c.pos.y + 0.6);
-      if (c.pos.y <= gy + 0.12 || hit || c.t > 0.9) {
-        this.scene.remove(c.mesh);
-        this.cans.splice(i, 1);
-        const y = this.world.groundAt(c.pos.x, c.pos.z, c.pos.y + 0.8);
-        if (c.pos.distanceTo(camPos) < 60) sfx.gel();
-        this.deploy(c.pos.x, c.pos.z, y, c.yaw, c.skin, c.team);
-      }
-    }
+  update(dt: number) {
     for (let i = this.groups.length - 1; i >= 0; i--) {
       const g = this.groups[i];
       g.age += dt;
@@ -193,7 +162,6 @@ export class Gloo {
   showReplay(items: { id: number; x: number; y: number; z: number; yaw: number; skin: string; age: number }[] | null) {
     const live = items === null;
     for (const g of this.groups) for (const s of g.segs) s.body.visible = s.cap.visible = live;
-    for (const c of this.cans) c.mesh.visible = live;
     const keep = new Set<number>();
     if (items)
       for (const it of items) {
@@ -225,7 +193,6 @@ export class Gloo {
   dispose() {
     this.bodyGeo.dispose();
     this.capGeo.dispose();
-    this.canGeo.dispose();
     for (const m of this.mats.values()) {
       m.body.dispose();
       m.cap.dispose();

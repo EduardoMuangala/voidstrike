@@ -23,7 +23,7 @@ export interface MapDef {
   pois: Poi[];
   arenas: string[];
   height: (w: World) => (x: number, z: number) => number;
-  color: (w: World, x: number, z: number, h: number, slope: number) => number;
+  ground: (w: World, size: number) => GroundMaps;
   populate: (w: World) => void;
 }
 
@@ -99,34 +99,220 @@ function islandHeight(def: MapDef, o: IslandOpts) {
   };
 }
 
-function paint(w: World, x: number, z: number, h: number, slope: number, pal: Palette, roads: Seg[], river?: [number, number][]) {
-  if (h < 0.9) return pal.sand;
-  if (river && h < 2 && polyDist(x, z, river) < 13) return pal.mud;
-  if (h > pal.snowline) return 0xf4f7fb;
-  if (slope > 0.62) return pal.rock;
-  const rd = roadDist(x, z, roads);
-  if (rd < 0) return pal.road;
-  for (const p of w.pois) {
-    const d = Math.hypot(x - p.x, z - p.z);
-    if (d > p.r + 4) continue;
-    if (p.kind === 'city' || p.kind === 'industrial' || p.kind === 'port') {
-      const gx = ((x - p.x) % 24 + 36) % 24, gz = ((z - p.z) % 24 + 36) % 24;
-      if (p.kind === 'city' && (Math.abs(gx - 12) < 3.5 || Math.abs(gz - 12) < 3.5)) return pal.road;
-      return p.kind === 'city' ? (Math.hypot(x - p.x, z - p.z) < 12 ? 0xd8c7a8 : pal.pave) : pal.concrete;
+export interface GroundMaps { color: HTMLCanvasElement; mask: HTMLCanvasElement }
+
+const rgb = (h: number): [number, number, number] => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
+const dark = (h: number) => (Math.round(((h >> 16) & 255) * 0.78) << 16) | (Math.round(((h >> 8) & 255) * 0.78) << 8) | Math.round((h & 255) * 0.78);
+const css = (h: number) => '#' + h.toString(16).padStart(6, '0');
+const mix3 = (a: number[], b: readonly number[], t: number) => {
+  a[0] += (b[0] - a[0]) * t;
+  a[1] += (b[1] - a[1]) * t;
+  a[2] += (b[2] - a[2]) * t;
+};
+
+/** Paints the ground colour map and surface mask (R hard, G sand/soil, B rock) with smooth vector roads. */
+function paintGround(w: World, N: number, pal: Palette, roads: Seg[], river?: [number, number][], extra?: (c: CanvasRenderingContext2D, m: CanvasRenderingContext2D) => void): GroundMaps {
+  const S = w.terrain.S;
+  const M = Math.min(512, N);
+  const mk = (n: number) => {
+    const c = document.createElement('canvas');
+    c.width = c.height = n;
+    return c;
+  };
+  const bc = mk(M), bm = mk(M);
+  const cx = bc.getContext('2d')!, mx = bm.getContext('2d')!;
+  const ci = cx.createImageData(M, M), mi = mx.createImageData(M, M);
+  const A = rgb(pal.grassA), B = rgb(pal.grassB), DRY = rgb(pal.dry), SAND = rgb(pal.sand), WET = rgb(pal.wetSand), ROCK = rgb(pal.rock), MUD = rgb(pal.mud), SNOW = rgb(0xf2f6fb);
+  const n = w.noise;
+  const col = [0, 0, 0];
+  for (let j = 0; j < M; j++)
+    for (let i = 0; i < M; i++) {
+      const x = -S + ((i + 0.5) / M) * S * 2, z = -S + ((j + 0.5) / M) * S * 2;
+      const h = w.terrain.heightAt(x, z);
+      const hx = w.terrain.heightAt(x + 1.5, z) - w.terrain.heightAt(x - 1.5, z);
+      const hz = w.terrain.heightAt(x, z + 1.5) - w.terrain.heightAt(x, z - 1.5);
+      const slope = Math.hypot(hx, hz) / 3;
+      const v = n.fbm(x * 0.018 + 7, z * 0.018 + 1, 3);
+      const v2 = n.noise(x * 0.11 + 3, z * 0.11 + 9);
+      const v3 = n.fbm(x * 0.006 + 40, z * 0.006 - 20, 2);
+      col[0] = A[0]; col[1] = A[1]; col[2] = A[2];
+      mix3(col, B, v);
+      mix3(col, DRY, smooth(0.55, 0.85, v3) * 0.65);
+      const lum = 1 + (v2 - 0.5) * 0.14;
+      col[0] *= lum; col[1] *= lum; col[2] *= lum;
+      const sandW = smooth(1.7, 0.75, h);
+      mix3(col, h < 0.2 ? WET : SAND, sandW);
+      let mudW = 0;
+      if (river) {
+        mudW = smooth(15, 9, polyDist(x, z, river)) * smooth(3.2, 1.2, h);
+        mix3(col, MUD, mudW);
+      }
+      const rockW = smooth(0.42, 0.75, slope) * (1 - sandW);
+      mix3(col, ROCK, rockW);
+      const snowW = smooth(pal.snowline - 3, pal.snowline + 1.5, h);
+      mix3(col, SNOW, snowW);
+      const k = (j * M + i) * 4;
+      ci.data[k] = col[0]; ci.data[k + 1] = col[1]; ci.data[k + 2] = col[2]; ci.data[k + 3] = 255;
+      mi.data[k] = 0;
+      mi.data[k + 1] = Math.max(sandW, snowW * 0.7, mudW * 0.8) * 255;
+      mi.data[k + 2] = rockW * 255;
+      mi.data[k + 3] = 255;
     }
-    if (p.kind === 'farm' && d > 14) return ((Math.floor((x - p.x) / 4) + Math.floor((z - p.z) / 30)) % 3 === 0 ? 0xd9b44a : (Math.floor((x - p.x) / 4) % 2 ? 0x8fbf4a : 0x7a5a3a));
-    if (p.kind === 'military') return 0xa89f7a;
-    if (p.kind === 'town' && d < 10) return 0xd8c7a8;
+  cx.putImageData(ci, 0, 0);
+  mx.putImageData(mi, 0, 0);
+  const color = mk(N), mask = mk(N);
+  const c = color.getContext('2d')!, m = mask.getContext('2d')!;
+  for (const [ctx, src] of [[c, bc], [m, bm]] as const) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, N, N);
+    ctx.scale(N / (2 * S), N / (2 * S));
+    ctx.translate(S, S);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
   }
-  const v = w.noise.noise(x * 0.04 + 7, z * 0.04 + 1);
-  const v2 = w.noise.noise(x * 0.18, z * 0.18);
-  const base = new THREE.Color(pal.grassA).lerp(new THREE.Color(pal.grassB), v);
-  base.offsetHSL(0, 0, (v2 - 0.5) * 0.05);
-  if (h > pal.snowline - 6) base.lerp(new THREE.Color(pal.rock), (h - pal.snowline + 6) / 6);
-  return base.getHex();
+  const both = (draw: (ctx: CanvasRenderingContext2D) => void, fill: number, maskFill: string) => {
+    c.fillStyle = c.strokeStyle = css(fill);
+    m.fillStyle = m.strokeStyle = maskFill;
+    draw(c);
+    draw(m);
+  };
+  const HARD = 'rgb(255,0,0)', SOIL = 'rgb(0,170,0)';
+  const circle = (x: number, z: number, r: number) => (ctx: CanvasRenderingContext2D) => {
+    ctx.beginPath();
+    ctx.arc(x, z, r, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  for (const p of w.pois) {
+    if (p.kind === 'city') {
+      both(circle(p.x, p.z, p.r + 6), pal.pave, HARD);
+      for (const ctx of [c, m]) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(p.x, p.z, p.r + 6, 0, Math.PI * 2);
+        ctx.clip();
+      }
+      const nn = Math.ceil(p.r / 24) + 1;
+      both((ctx) => {
+        ctx.lineWidth = 7.4;
+        ctx.beginPath();
+        for (let k = -nn; k < nn; k++) {
+          const o = k * 24 + 12;
+          ctx.moveTo(p.x + o, p.z - p.r - 10);
+          ctx.lineTo(p.x + o, p.z + p.r + 10);
+          ctx.moveTo(p.x - p.r - 10, p.z + o);
+          ctx.lineTo(p.x + p.r + 10, p.z + o);
+        }
+        ctx.stroke();
+      }, pal.road, HARD);
+      // zebra crossings and kerb lines
+      both((ctx) => {
+        ctx.lineWidth = 0.18;
+        ctx.setLineDash([2.2, 2.2]);
+        ctx.beginPath();
+        for (let k = -nn; k < nn; k++) {
+          const o = k * 24 + 12;
+          ctx.moveTo(p.x + o, p.z - p.r - 10);
+          ctx.lineTo(p.x + o, p.z + p.r + 10);
+          ctx.moveTo(p.x - p.r - 10, p.z + o);
+          ctx.lineTo(p.x + p.r + 10, p.z + o);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }, 0xe9e2cf, HARD);
+      for (const ctx of [c, m]) ctx.restore();
+      both(circle(p.x, p.z, 11), 0xd9c9a6, HARD);
+      both(circle(p.x, p.z, 8), 0xc9b48c, HARD);
+    } else if (p.kind === 'industrial' || p.kind === 'port') {
+      both(circle(p.x, p.z, p.r + 6), pal.concrete, HARD);
+      both((ctx) => {
+        ctx.lineWidth = 0.25;
+        ctx.beginPath();
+        for (let k = -p.r; k <= p.r; k += 8) {
+          ctx.moveTo(p.x + k, p.z - p.r);
+          ctx.lineTo(p.x + k, p.z + p.r);
+          ctx.moveTo(p.x - p.r, p.z + k);
+          ctx.lineTo(p.x + p.r, p.z + k);
+        }
+        ctx.stroke();
+      }, 0x7f7c77, HARD);
+      both((ctx) => {
+        ctx.lineWidth = 0.3;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(p.x, p.z, p.r * 0.45, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }, 0xf2c21a, HARD);
+    } else if (p.kind === 'military') {
+      both(circle(p.x, p.z, p.r + 2), 0xb3a77c, SOIL);
+    } else if (p.kind === 'farm') {
+      for (const ctx of [c, m]) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(p.x, p.z, p.r + 6, 0, Math.PI * 2);
+        ctx.clip();
+      }
+      const crops = [0xd9b44a, 0x8fbf4a, 0x8a6a46, 0xc9a23a, 0x6fae3e];
+      for (let fx = -p.r - 6, f = 0; fx < p.r + 6; fx += 14, f++) {
+        const cc = crops[f % crops.length];
+        both((ctx) => ctx.fillRect(p.x + fx, p.z - p.r - 6, 13.4, (p.r + 6) * 2), cc, cc === 0x8a6a46 ? SOIL : 'rgb(0,60,0)');
+        both((ctx) => {
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          for (let r = 1.5; r < 13; r += 2) {
+            ctx.moveTo(p.x + fx + r, p.z - p.r - 6);
+            ctx.lineTo(p.x + fx + r, p.z + p.r + 6);
+          }
+          ctx.stroke();
+        }, cc === 0x8a6a46 ? 0x6f5236 : dark(cc), 'rgb(0,120,0)');
+      }
+      for (const ctx of [c, m]) ctx.restore();
+      both(circle(p.x, p.z, 16), 0x9c7c58, SOIL);
+    } else if (p.kind === 'town') {
+      both(circle(p.x, p.z, 11), 0xd4c3a0, HARD);
+      both(circle(p.x, p.z, 7), 0xc2ae88, HARD);
+    } else if (p.kind === 'camp') {
+      both(circle(p.x, p.z, 15), 0x9a7e5a, SOIL);
+    }
+  }
+
+  // road network: soft shoulder, asphalt, centre dashes
+  both((ctx) => {
+    for (const s of roads) {
+      ctx.lineWidth = s[4] * 2 + 2.2;
+      ctx.beginPath();
+      ctx.moveTo(s[0], s[1]);
+      ctx.lineTo(s[2], s[3]);
+      ctx.stroke();
+    }
+  }, pal.shoulder, SOIL);
+  both((ctx) => {
+    for (const s of roads) {
+      ctx.lineWidth = s[4] * 2;
+      ctx.beginPath();
+      ctx.moveTo(s[0], s[1]);
+      ctx.lineTo(s[2], s[3]);
+      ctx.stroke();
+    }
+  }, pal.road, HARD);
+  both((ctx) => {
+    ctx.lineWidth = 0.2;
+    ctx.setLineDash([3, 3.5]);
+    for (const s of roads) {
+      ctx.beginPath();
+      ctx.moveTo(s[0], s[1]);
+      ctx.lineTo(s[2], s[3]);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }, 0xf3ead2, HARD);
+  extra?.(c, m);
+  return { color, mask };
 }
 
-interface Palette { grassA: number; grassB: number; sand: number; rock: number; road: number; pave: number; concrete: number; mud: number; snowline: number; trees: number[]; bushes: number[]; flowers: number[] }
+interface Palette { grassA: number; grassB: number; dry: number; sand: number; wetSand: number; shoulder: number; rock: number; road: number; pave: number; concrete: number; mud: number; snowline: number; trees: number[]; bushes: number[]; flowers: number[] }
 
 function styleCity(w: World, tall: boolean): Style {
   return {
@@ -436,7 +622,7 @@ function populatePois(w: World, pal: Palette) {
 
 // ================================================================= SOLARIS
 const SOL_PAL: Palette = {
-  grassA: 0x63c04a, grassB: 0x8fd35a, sand: 0xf1dca0, rock: 0x8c8a86, road: 0x5f5b57, pave: 0xb7b0a4, concrete: 0x9c9a96, mud: 0x8a7a5a, snowline: 60,
+  grassA: 0x5aa83e, grassB: 0x86c24f, dry: 0xb9b261, sand: 0xe9d6a0, wetSand: 0xc9b47e, shoulder: 0xa89272, rock: 0x8c8a86, road: 0x56534f, pave: 0xb7b0a4, concrete: 0x9c9a96, mud: 0x8a7a5a, snowline: 60,
   trees: [0x3f9a3a, 0x4cae2e, 0x2f8a3b, 0x5cbf3c, 0x7bc043], bushes: [0x3f8f3a, 0x55a63a, 0x2f7d3b], flowers: [0xff5c8a, 0xffd23f, 0xffffff, 0xff8a3d, 0xb05cff],
 };
 const SOL_POIS: Poi[] = [
@@ -456,7 +642,7 @@ const SOLARIS: MapDef = {
   pois: SOL_POIS,
   arenas: ['CIDADE SOL', 'FÁBRICA', 'PORTO AZUL', 'BASE MILITAR'],
   height: (w) => islandHeight(SOLARIS, { roll: 7, mountains: [{ x: -22, z: 132, r: 62, h: 24 }, { x: 62, z: 44, r: 44, h: 13 }, { x: -64, z: -14, r: 38, h: 11 }, { x: 160, z: -10, r: 40, h: 15 }] })(w),
-  color: (w, x, z, h, s) => paint(w, x, z, h, s, SOL_PAL, SOL_ROADS),
+  ground: (w, n) => paintGround(w, n, SOL_PAL, SOL_ROADS),
   populate: (w) => {
     populatePois(w, SOL_PAL);
     scatter(w, SOL_PAL, SOL_ROADS, undefined, { trees: 150, rocks: 70, bushes: 140, cover: 46, houses: 14, cars: 14 }, ['round', 'round', 'palm']);
@@ -465,7 +651,7 @@ const SOLARIS: MapDef = {
 
 // ================================================================= INFERNA
 const INF_PAL: Palette = {
-  grassA: 0x9cb04a, grassB: 0xc2b04e, sand: 0xe6cf98, rock: 0x8a7f74, road: 0x595048, pave: 0xb5a796, concrete: 0x9a958e, mud: 0x7a6a4a, snowline: 27,
+  grassA: 0x8ea446, grassB: 0xb7a64c, dry: 0xc9a25a, sand: 0xe0c894, wetSand: 0xb89e70, shoulder: 0x9c8466, rock: 0x857a70, road: 0x524a43, pave: 0xb5a796, concrete: 0x9a958e, mud: 0x7a6a4a, snowline: 27,
   trees: [0xd9822b, 0xc2412d, 0xe8b23a, 0x6f8f3a, 0xb8562a], bushes: [0x8a8a3a, 0xa06a2a, 0x6f8f3a], flowers: [0xffd23f, 0xff5c3d, 0xffffff],
 };
 const RIVER: [number, number][] = [[-240, -150], [-120, -62], [-24, 6], [62, 18], [140, 88], [240, 160]];
@@ -507,7 +693,7 @@ const INFERNA: MapDef = {
   pois: INF_POIS,
   arenas: ['CENTRAL', 'COMPLEXO INDUSTRIAL', 'QUARTEL'],
   height: (w) => islandHeight(INFERNA, { roll: 8, river: RIVER, riverW: 7, mountains: [{ x: 112, z: -150, r: 64, h: 32 }, { x: -60, z: 172, r: 50, h: 18 }, { x: 22, z: -62, r: 34, h: 10 }, { x: -170, z: -40, r: 36, h: 14 }] })(w),
-  color: (w, x, z, h, s) => paint(w, x, z, h, s, INF_PAL, INF_ROADS, RIVER),
+  ground: (w, n) => paintGround(w, n, INF_PAL, INF_ROADS, RIVER),
   populate: (w) => {
     riverBridges(w);
     populatePois(w, INF_PAL);
@@ -516,7 +702,7 @@ const INFERNA: MapDef = {
 };
 
 // ================================================================= TRAINING RANGE
-const RANGE_PAL: Palette = { ...SOL_PAL, grassA: 0x7fbf5a, grassB: 0x8fcf6a };
+const RANGE_PAL: Palette = { ...SOL_PAL, grassA: 0x5fae45, grassB: 0x72bb50, dry: 0x7fb24e };
 const RANGE: MapDef = {
   id: 'range', name: 'CAMPO DE TREINO', sub: '', radius: 58, seed: 42, step: 3,
   sky: SOLARIS.sky,
@@ -526,7 +712,17 @@ const RANGE: MapDef = {
     const d = Math.hypot(x, z);
     return d < 62 ? 2.2 : 2.2 - (d - 62) * 0.6;
   },
-  color: (_w, x, z, h) => (h < 0.9 ? RANGE_PAL.sand : Math.abs(x) < 3 && z < 0 ? 0x5f5b57 : ((Math.floor(x / 6) + Math.floor(z / 6)) % 2 ? 0x7fbf5a : 0x8fcf6a)),
+  ground: (w, n) =>
+    paintGround(w, n, RANGE_PAL, [[0, -50, 0, -4, 3]], undefined, (c, m) => {
+      c.globalAlpha = 0.18;
+      c.fillStyle = '#ffffff';
+      for (let x = -60; x < 60; x += 12) c.fillRect(x, -60, 6, 120);
+      c.globalAlpha = 1;
+      for (const ctx of [c, m]) {
+        ctx.fillStyle = ctx === c ? '#b9b2a4' : 'rgb(255,0,0)';
+        ctx.fillRect(-26, 8, 52, 22);
+      }
+    }),
   populate: (w) => {
     building(w, -28, 22, 0, 11, 10, 3, { wall: 0xf2c9a8, trim: 0xffffff, floor: 0xa9a39a, roof: 0x384b63, roofType: 'flat', access: true });
     warehouse(w, 26, 24, 0, 18, 13, 0x9aa5b1, 0x3b5f8a);

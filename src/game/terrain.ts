@@ -96,25 +96,15 @@ export class Terrain {
     return Infinity;
   }
 
-  mesh(color: (x: number, z: number, h: number, slope: number) => number): THREE.Mesh {
+  mesh(material: THREE.Material): THREE.Mesh {
     const n = this.n, S = this.S, st = this.step;
     const pos = new Float32Array(n * n * 3);
-    const col = new Float32Array(n * n * 3);
-    const c = new THREE.Color();
     for (let j = 0; j < n; j++)
       for (let i = 0; i < n; i++) {
         const k = j * n + i;
-        const x = -S + i * st, z = -S + j * st, y = this.h[k];
-        pos[k * 3] = x;
-        pos[k * 3 + 1] = y;
-        pos[k * 3 + 2] = z;
-        const hx = this.h[j * n + Math.min(n - 1, i + 1)] - this.h[j * n + Math.max(0, i - 1)];
-        const hz = this.h[Math.min(n - 1, j + 1) * n + i] - this.h[Math.max(0, j - 1) * n + i];
-        const slope = Math.hypot(hx, hz) / (2 * st);
-        c.setHex(color(x, z, y, slope));
-        col[k * 3] = c.r;
-        col[k * 3 + 1] = c.g;
-        col[k * 3 + 2] = c.b;
+        pos[k * 3] = -S + i * st;
+        pos[k * 3 + 1] = this.h[k];
+        pos[k * 3 + 2] = -S + j * st;
       }
     const idx = new Uint32Array((n - 1) * (n - 1) * 6);
     let p = 0;
@@ -126,11 +116,10 @@ export class Terrain {
       }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     g.setIndex(new THREE.BufferAttribute(idx, 1));
     g.computeVertexNormals();
     g.computeBoundingSphere();
-    const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true }));
+    const m = new THREE.Mesh(g, material);
     m.matrixAutoUpdate = false;
     return m;
   }
