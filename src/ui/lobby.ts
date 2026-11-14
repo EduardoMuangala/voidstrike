@@ -8,6 +8,7 @@ import { sfx, unlockAudio } from '../audio';
 import { signOut } from '../auth';
 import { supabase } from '../supabase';
 import { createRoom, deleteRoom, findRoomByCode, joinRoom, listRooms, subscribeRoomList, type Member, type RoomChannel, type RoomRow } from '../rooms';
+import { RoomNet, type PeerLink } from '../webrtc';
 import { CharacterRig } from '../models/character';
 import { glow, mat } from '../models/materials';
 import { COIN, GEM, MENU_ICONS, heroIcon, itemIcon, weaponIcon } from './icons';
@@ -57,6 +58,8 @@ export class Lobby {
   private roomChannel: RoomChannel | null = null;
   private roomMembers: Member[] = [];
   private roomReady = false;
+  private net: RoomNet | null = null;
+  private netPeers: PeerLink[] = [];
 
   constructor(root: HTMLElement, onPlay: (mode: ModeId, diff: Difficulty) => void) {
     this.onPlay = onPlay;
@@ -512,6 +515,16 @@ export class Lobby {
   private roomDetailHtml(r: RoomRow) {
     const isHost = r.host_id === this.authUserId;
     const members = this.roomMembers;
+    const netBadge = (key: string) => {
+      if (key === this.authUserId) return '<em class="net you">TU</em>';
+      // Star topology: the host has a direct link to every guest; a guest only
+      // knows the state of its own link to the host, not to other guests.
+      const link = isHost ? this.netPeers.find((p) => p.id === key) : key === r.host_id ? this.netPeers.find((p) => p.id === r.host_id) : null;
+      if (!link) return '<em class="net">—</em>';
+      if (link.status === 'connected') return `<em class="net on">● P2P ${link.ping ?? '…'}ms</em>`;
+      if (link.status === 'connecting') return '<em class="net">a ligar…</em>';
+      return '<em class="net off">desligado</em>';
+    };
     return `
       <h2 class="sect">${esc(r.name)}</h2>
       <div class="room-code-big">CÓDIGO <b>${r.code}</b></div>
@@ -523,9 +536,9 @@ export class Lobby {
       </div>
       <h2 class="sect">JOGADORES NA SALA · ${members.length}</h2>
       <ul class="room-members">
-        ${members.map((m) => `<li class="${m.ready ? 'ready' : ''}"><b>${esc(m.name)}</b><span>${m.ready ? 'PRONTO' : 'A PREPARAR...'}</span></li>`).join('')}
+        ${members.map((m) => `<li class="${m.ready ? 'ready' : ''}"><b>${esc(m.name)}</b>${netBadge(m.key)}<span>${m.ready ? 'PRONTO' : 'A PREPARAR...'}</span></li>`).join('')}
       </ul>
-      <p class="tip">A sincronização da partida em tempo real ainda não está ligada — por agora a sala serve para te encontrares com as outras pessoas.</p>
+      <p class="tip">Ligação direta entre navegadores (WebRTC) — o Supabase só serve para se encontrarem. A sincronização da partida ainda não usa esta ligação.</p>
     `;
   }
 
@@ -559,6 +572,9 @@ export class Lobby {
   private leaveCurrentRoom() {
     this.roomChannel?.leave();
     this.roomChannel = null;
+    this.net?.dispose();
+    this.net = null;
+    this.netPeers = [];
     this.currentRoom = null;
     this.roomMembers = [];
     this.roomReady = false;
@@ -589,6 +605,11 @@ export class Lobby {
       this.roomMembers = members;
       this.render();
     });
+    this.net = new RoomNet(row.id, uid, row.host_id === uid, row.host_id);
+    this.net.onUpdate = (peers) => {
+      this.netPeers = peers;
+      this.render();
+    };
     this.render();
   }
 
