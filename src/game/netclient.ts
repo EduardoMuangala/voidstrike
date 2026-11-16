@@ -7,6 +7,7 @@ import type { RoomNet } from '../webrtc';
 import type { MapId } from './maps';
 import type { NetActorSnap, NetMsg } from '../netproto';
 import type { MatchResult } from './match';
+import { ARENA_R, pickArena } from './match';
 import { World } from './world';
 import { Fx } from './fx';
 import { Hud } from './hud';
@@ -45,6 +46,7 @@ export class NetMatch {
   private selfId: number;
   private hostId: string;
   private rigs = new Map<number, CharacterRig>();
+  private zoneWall: THREE.Mesh | null = null;
   private latest: NetActorSnap[] = [];
   private yaw = 0;
   private pitch = 0;
@@ -72,6 +74,19 @@ export class NetMatch {
     const sun = new THREE.DirectionalLight(sky.sun, sky.sunInt);
     sun.position.set(...sky.sunPos);
     this.scene.add(sun, this.world.group, this.fx.group);
+    // Same seeded draw the host makes right after building its own World, so
+    // everyone in the room ends up with the identical safe-zone ring — no
+    // extra network message needed for it.
+    const poi = pickArena(this.world);
+    if (poi) {
+      this.zoneWall = new THREE.Mesh(
+        new THREE.CylinderGeometry(1, 1, 60, 48, 1, true),
+        new THREE.MeshBasicMaterial({ color: 0xff4a6a, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false, fog: false }),
+      );
+      this.zoneWall.position.set(poi.x, 20, poi.z);
+      this.zoneWall.scale.set(ARENA_R, 1, ARENA_R);
+      this.scene.add(this.zoneWall);
+    }
     this.hud = new Hud(opts.root, 'squad');
     this.input = new Input(opts.canvas, this.hud.el);
     this.input.enabled = true;
@@ -207,6 +222,8 @@ export class NetMatch {
     this.input.dispose();
     this.hud.dispose();
     for (const rig of this.rigs.values()) rig.dispose();
+    this.zoneWall?.geometry.dispose();
+    (this.zoneWall?.material as THREE.Material | undefined)?.dispose();
     this.world.dispose();
     this.fx.dispose();
   }
