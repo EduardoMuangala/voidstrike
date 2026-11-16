@@ -48,6 +48,8 @@ export class NetMatch {
   private latest: NetActorSnap[] = [];
   private yaw = 0;
   private pitch = 0;
+  private scoreA = 0;
+  private scoreB = 0;
   private camDist = 3.2;
   private far: number;
   private onEndCb: (r: MatchResult) => void;
@@ -82,7 +84,11 @@ export class NetMatch {
   }
 
   private onNet(msg: NetMsg) {
-    if (msg.t === 'snap') this.latest = msg.actors;
+    if (msg.t === 'snap') {
+      this.latest = msg.actors;
+      this.scoreA = msg.scoreA;
+      this.scoreB = msg.scoreB;
+    }
     else if (msg.t === 'shot') this.fx.tracer(new THREE.Vector3(...msg.a), new THREE.Vector3(...msg.b), 0xffe28a);
     else if (msg.t === 'boom') {
       const p = new THREE.Vector3(...msg.p);
@@ -184,6 +190,8 @@ export class NetMatch {
     this.hud.healing(0);
     this.hud.crosshair(6, mine.alive, false);
     this.hud.scope(false);
+    this.hud.text('#tsScore .a', this.scoreA);
+    this.hud.text('#tsScore .f', this.scoreB);
   }
 
   render() {
