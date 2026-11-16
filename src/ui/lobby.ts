@@ -499,28 +499,30 @@ export class Lobby {
     const modeName = (id: string) => MODES.find((m) => m.id === id)?.name || id.toUpperCase();
     const mapName = (id: string) => BR_MAPS.find((m) => m.id === id)?.name || id.toUpperCase();
     return `
-      <h2 class="sect">CRIAR SALA</h2>
-      <form class="form room-form" id="roomCreateForm">
-        <label>NOME DA SALA<input name="name" maxlength="24" placeholder="SALA DE ${esc(profile.name)}"/></label>
-        <label>MODO<select name="mode">${MODES.filter((m) => m.id === 'squad').map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
-        <label>MAPA<select name="map">${BR_MAPS.map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
-        <label>MÁX. JOGADORES<select name="max">${[4, 8, 16, 48].map((n) => `<option value="${n}">${n}</option>`).join('')}</select></label>
-        <button class="btn-primary" type="submit" ${this.roomsBusy ? 'disabled' : ''}>CRIAR E ENTRAR</button>
-      </form>
-      <h2 class="sect">ENTRAR POR CÓDIGO</h2>
-      <form class="form room-form" id="roomJoinForm">
-        <label>CÓDIGO DA SALA<input name="code" maxlength="5" style="text-transform:uppercase" placeholder="EX: 7K2PX"/></label>
-        <button class="btn-ghost" type="submit" ${this.roomsBusy ? 'disabled' : ''}>ENTRAR NA SALA</button>
-      </form>
-      <h2 class="sect">SALAS ABERTAS · ${this.roomList.length}</h2>
-      <div class="grid">
-        ${this.roomList.length ? this.roomList.map((r) => `
-          <button class="card room-card" data-join="${r.id}">
-            <span class="rbar"></span>
-            <b>${esc(r.name)}</b>
-            <span class="foot">${modeName(r.mode)} · ${mapName(r.map)}</span>
-            <span class="room-code">${r.code}</span>
-          </button>`).join('') : '<p class="tip">Ainda não há salas abertas. Cria a primeira!</p>'}
+      <div class="rooms-scroll">
+        <h2 class="sect">CRIAR SALA</h2>
+        <form class="form room-form" id="roomCreateForm">
+          <label>NOME DA SALA<input name="name" maxlength="24" placeholder="SALA DE ${esc(profile.name)}"/></label>
+          <label>MODO<select name="mode">${MODES.filter((m) => m.id === 'squad').map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
+          <label>MAPA<select name="map">${BR_MAPS.map((m) => `<option value="${m.id}">${m.name}</option>`).join('')}</select></label>
+          <label>MÁX. JOGADORES<select name="max">${[4, 8, 16, 48].map((n) => `<option value="${n}">${n}</option>`).join('')}</select></label>
+          <button class="btn-primary" type="submit" ${this.roomsBusy ? 'disabled' : ''}>CRIAR E ENTRAR</button>
+        </form>
+        <h2 class="sect">ENTRAR POR CÓDIGO</h2>
+        <form class="form room-form" id="roomJoinForm">
+          <label>CÓDIGO DA SALA<input name="code" maxlength="5" style="text-transform:uppercase" placeholder="EX: 7K2PX"/></label>
+          <button class="btn-ghost" type="submit" ${this.roomsBusy ? 'disabled' : ''}>ENTRAR NA SALA</button>
+        </form>
+        <h2 class="sect">SALAS ABERTAS · ${this.roomList.length}</h2>
+        <div class="room-list">
+          ${this.roomList.length ? this.roomList.map((r) => `
+            <button class="card room-card" data-join="${r.id}">
+              <span class="rbar"></span>
+              <b>${esc(r.name)}</b>
+              <span class="foot">${modeName(r.mode)} · ${mapName(r.map)}</span>
+              <span class="room-code">${r.code}</span>
+            </button>`).join('') : '<p class="tip">Ainda não há salas abertas. Cria a primeira!</p>'}
+        </div>
       </div>
     `;
   }
@@ -539,20 +541,22 @@ export class Lobby {
       return '<em class="net off">desligado</em>';
     };
     return `
-      <h2 class="sect">${esc(r.name)}</h2>
-      <div class="room-code-big">CÓDIGO <b>${r.code}</b></div>
-      <p class="tip">Partilha este código para outras pessoas entrarem na tua sala.</p>
-      <div class="mrow">
-        <button class="btn-ghost" data-a="leave-room">SAIR DA SALA</button>
-        ${isHost ? '<button class="btn-ghost danger" data-a="close-room">FECHAR SALA</button>' : ''}
-        <button class="btn-primary ${this.roomReady ? 'on' : ''}" data-a="toggle-ready">${this.roomReady ? 'PRONTO ✓' : 'MARCAR PRONTO'}</button>
-        ${isHost ? '<button class="btn-primary" data-a="start-room-match">INICIAR PARTIDA</button>' : ''}
+      <div class="rooms-scroll">
+        <h2 class="sect">${esc(r.name)}</h2>
+        <div class="room-code-big">CÓDIGO <b>${r.code}</b></div>
+        <p class="tip">Partilha este código para outras pessoas entrarem na tua sala.</p>
+        <div class="mrow">
+          <button class="btn-ghost" data-a="leave-room">SAIR DA SALA</button>
+          ${isHost ? '<button class="btn-ghost danger" data-a="close-room">FECHAR SALA</button>' : ''}
+          <button class="btn-primary ${this.roomReady ? 'on' : ''}" data-a="toggle-ready">${this.roomReady ? 'PRONTO ✓' : 'MARCAR PRONTO'}</button>
+          ${isHost ? '<button class="btn-primary" data-a="start-room-match">INICIAR PARTIDA</button>' : ''}
+        </div>
+        <h2 class="sect">JOGADORES NA SALA · ${members.length}</h2>
+        <ul class="room-members">
+          ${members.map((m) => `<li class="${m.ready ? 'ready' : ''}"><b>${esc(m.name)}</b>${netBadge(m.key)}<span>${m.ready ? 'PRONTO' : 'A PREPARAR...'}</span></li>`).join('')}
+        </ul>
+        <p class="tip">Ligação direta entre navegadores (WebRTC) para a partida.</p>
       </div>
-      <h2 class="sect">JOGADORES NA SALA · ${members.length}</h2>
-      <ul class="room-members">
-        ${members.map((m) => `<li class="${m.ready ? 'ready' : ''}"><b>${esc(m.name)}</b>${netBadge(m.key)}<span>${m.ready ? 'PRONTO' : 'A PREPARAR...'}</span></li>`).join('')}
-      </ul>
-      <p class="tip">Ligação direta entre navegadores (WebRTC) — o Supabase só serve para se encontrarem. A sincronização da partida ainda não usa esta ligação.</p>
     `;
   }
 
