@@ -16,6 +16,12 @@ interface SignalMsg {
   candidate?: RTCIceCandidateInit;
 }
 
+interface RelayMsg {
+  to: string | null; // null = everyone in the room
+  from: string;
+  data: unknown;
+}
+
 // Public, free STUN servers — just for NAT traversal discovery, no game traffic goes through them.
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }];
 
@@ -29,9 +35,15 @@ interface Link {
 
 /**
  * Direct peer-to-peer connections between everyone in a room, star-shaped
- * around the host. Supabase Realtime Broadcast is only the "introduction
+ * around the host. Supabase Realtime Broadcast is the "introduction
  * service" (it carries the WebRTC offer/answer/ICE candidates) — once
  * connected, game traffic goes straight between browsers, not through Supabase.
+ *
+ * STUN-only (no TURN server, no extra infrastructure) can't traverse every
+ * real network pairing — some users simply never reach a direct P2P link.
+ * For those, broadcast()/sendTo() fall back to relaying through the same
+ * Supabase channel already used for signaling, so the room still works
+ * (slightly higher latency) instead of silently going nowhere.
  */
 export class RoomNet {
   private channel: ReturnType<typeof supabase.channel>;
@@ -49,6 +61,7 @@ export class RoomNet {
     this.hostId = hostId;
     this.channel = supabase.channel(`webrtc:${roomId}`, { config: { broadcast: { self: false } } });
     this.channel.on('broadcast', { event: 'signal' }, ({ payload }) => this.onSignal(payload as SignalMsg));
+    this.channel.on('broadcast', { event: 'relay' }, ({ payload }) => this.onRelay(payload as RelayMsg));
     this.channel.subscribe((status) => {
       if (status === 'SUBSCRIBED' && !this.isHost) this.connectToHost();
     });
@@ -135,13 +148,27 @@ export class RoomNet {
 
   /** Send to everyone directly connected (for the host: all guests; for a guest: just the host). */
   broadcast(data: unknown) {
-    for (const link of this.links.values()) if (link.dc?.readyState === 'open') link.dc.send(JSON.stringify(data));
+    let allOpen = this.links.size > 0;
+    for (const link of this.links.values()) {
+      if (link.dc?.readyState === 'open') link.dc.send(JSON.stringify(data));
+      else allOpen = false;
+    }
+    // Some peer isn't (yet, or ever) reachable P2P — relay it through Supabase too.
+    if (!allOpen) this.channel.send({ type: 'broadcast', event: 'relay', payload: { to: null, from: this.selfId, data } });
   }
 
   /** Send to one specific peer only (the host talking to one guest, or a guest talking to the host). */
   sendTo(peerId: string, data: unknown) {
     const link = this.links.get(peerId);
     if (link?.dc?.readyState === 'open') link.dc.send(JSON.stringify(data));
+    else this.channel.send({ type: 'broadcast', event: 'relay', payload: { to: peerId, from: this.selfId, data } });
+  }
+
+  private onRelay(msg: RelayMsg) {
+    if (msg.from === this.selfId || (msg.to !== null && msg.to !== this.selfId)) return;
+    // Already getting this peer's data over the real P2P link — ignore the relayed copy.
+    if (this.links.get(msg.from)?.dc?.readyState === 'open') return;
+    this.onMessage(msg.from, msg.data);
   }
 
   isConnectedTo(peerId: string) {
