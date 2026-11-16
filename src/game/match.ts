@@ -163,6 +163,7 @@ export class Match {
   private endT = -1;
   private result: MatchResult | null = null;
   private pauseEl: HTMLElement;
+  private menuOpen = false;
   private deathEl: HTMLElement | null = null;
   zone = { cx: 0, cz: 0, r: 300, ncx: 0, ncz: 0, nr: 300, fcx: 0, fcz: 0, fr: 300, phase: -1, t: 0, shrinking: false, dps: 0, started: false };
   private zoneWall: THREE.Mesh | null = null;
@@ -204,12 +205,14 @@ export class Match {
 
     this.pauseEl = document.createElement('div');
     this.pauseEl.id = 'pausemenu';
-    this.pauseEl.innerHTML = `<div class="pbox"><h2>PAUSA</h2><button class="btn-primary" data-p="resume">CONTINUAR</button><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`;
+    this.pauseEl.innerHTML = opts.net
+      ? `<div class="pbox"><h2>MENU</h2><p class="tip">É uma partida com outras pessoas — não dá para pausar.</p><button class="btn-primary" data-p="resume">CONTINUAR A JOGAR</button><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`
+      : `<div class="pbox"><h2>PAUSA</h2><button class="btn-primary" data-p="resume">CONTINUAR</button><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`;
     this.pauseEl.addEventListener('click', (e) => {
       const b = (e.target as HTMLElement).closest<HTMLElement>('[data-p]');
       if (!b) return;
       sfx.click();
-      if (b.dataset.p === 'resume') this.setPaused(false);
+      if (b.dataset.p === 'resume') this.closeMenu();
       else this.quit();
     });
     opts.root.appendChild(this.pauseEl);
@@ -552,8 +555,9 @@ export class Match {
   // =============================================================== main loop
   update(rawDt: number) {
     const dt = Math.min(rawDt, 0.05);
-    if (this.input.take('pause')) {
-      if (!this.over) this.setPaused(!this.paused);
+    if (this.input.take('pause') && !this.over) {
+      if (this.net) this.toggleMenu();
+      else this.setPaused(!this.paused);
     }
     if (this.input.take('map')) this.mapOpen = !this.mapOpen;
     this.fpsAcc += rawDt;
@@ -622,6 +626,27 @@ export class Match {
     this.pauseEl.classList.toggle('show', p);
     this.input.reset();
     if (p) document.exitPointerLock?.();
+  }
+
+  /** Room matches never freeze — other people are still playing — so this just shows/hides the overlay. */
+  private toggleMenu() {
+    this.menuOpen = !this.menuOpen;
+    this.pauseEl.classList.toggle('show', this.menuOpen);
+    if (this.menuOpen) {
+      this.input.reset();
+      document.exitPointerLock?.();
+    }
+  }
+
+  private closeMenu() {
+    if (this.net) {
+      this.menuOpen = false;
+      this.pauseEl.classList.remove('show');
+    } else this.setPaused(false);
+  }
+
+  get isRoom() {
+    return !!this.net;
   }
 
   quit() {
