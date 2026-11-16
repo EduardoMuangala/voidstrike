@@ -62,6 +62,8 @@ export interface NetStartMsg {
 export interface NetSnapMsg {
   t: 'snap';
   time: number;
+  scoreA: number;
+  scoreB: number;
   actors: NetActorSnap[];
 }
 
@@ -102,7 +104,7 @@ export interface NetEndMsg {
 export type NetMsg = NetInputMsg | NetStartMsg | NetSnapMsg | NetShotMsg | NetBoomMsg | NetGlooMsg | NetKillMsg | NetEndMsg;
 
 export const netStart = (seed: number, map: MapId, mode: ModeId, you: number): NetStartMsg => ({ t: 'start', seed, map, mode, you });
-export const netSnap = (time: number, actors: NetActorSnap[]): NetSnapMsg => ({ t: 'snap', time, actors });
+export const netSnap = (time: number, scoreA: number, scoreB: number, actors: NetActorSnap[]): NetSnapMsg => ({ t: 'snap', time, scoreA, scoreB, actors });
 export const netShot = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): NetShotMsg => ({ t: 'shot', a: [a.x, a.y, a.z], b: [b.x, b.y, b.z] });
 export const netBoom = (p: { x: number; y: number; z: number }): NetBoomMsg => ({ t: 'boom', p: [p.x, p.y, p.z] });
 export const netKill = (killer: string, victim: string, weapon: string): NetKillMsg => ({ t: 'kill', killer, victim, weapon });

@@ -252,20 +252,25 @@ export class Match {
       }
     } else if (this.mode === 'squad') {
       this.setupArena();
-      const netPlayers = opts.netPlayers || [];
+      const netPlayers = (opts.netPlayers || []).slice(0, 7);
       const isRoom = !!opts.net;
-      const allySlots = 3;
-      for (let i = 0; i < Math.min(netPlayers.length, allySlots); i++) {
+      // The host is already team 0; split the other real people across both
+      // teams as evenly as possible so a room of 2 is a 1v1, 4 is a 2v2, etc.
+      const teamCount = [1, 0];
+      for (let i = 0; i < netPlayers.length; i++) {
         const peer = netPlayers[i];
-        const a = new Actor(this.actors.length, peer.name, 0, pick(HEROES).id, randomOutfit());
+        const team = teamCount[1] < teamCount[0] ? 1 : teamCount[0] < teamCount[1] ? 0 : i % 2 === 0 ? 1 : 0;
+        if (teamCount[team] >= 4) continue;
+        const a = new Actor(this.actors.length, peer.name, team, pick(HEROES).id, randomOutfit());
         a.netId = peer.id;
         this.actors.push(a);
         this.netActorByPeer.set(peer.id, a);
+        teamCount[team]++;
       }
       // Live rooms are real people only — no bots padding out the teams.
       if (!isRoom) {
-        for (let i = netPlayers.length; i < allySlots; i++) mkBot(0);
-        for (let i = 0; i < 4; i++) mkBot(1);
+        for (let i = teamCount[0]; i < 4; i++) mkBot(0);
+        for (let i = teamCount[1]; i < 4; i++) mkBot(1);
       }
       for (const a of this.actors) {
         if (a.isPlayer) {
@@ -1193,7 +1198,7 @@ export class Match {
         crouch: a.crouch, onGround: a.onGround, dropping: a.dropping, glide: a.glide, speed: a.speedNow, vx: a.vel.x, vz: a.vel.z,
       });
     }
-    this.net!.broadcast(netSnap(this.time, actors));
+    this.net!.broadcast(netSnap(this.time, this.scoreA, this.scoreB, actors));
   }
 
   // =============================================================== shared actions
