@@ -551,6 +551,7 @@ export class Lobby {
           <button class="btn-primary ${this.roomReady ? 'on' : ''}" data-a="toggle-ready">${this.roomReady ? 'PRONTO ✓' : 'MARCAR PRONTO'}</button>
           ${isHost ? '<button class="btn-primary" data-a="start-room-match">INICIAR PARTIDA</button>' : ''}
         </div>
+        ${isHost ? '' : '<p class="tip wait">A aguardar que o anfitrião da sala inicie a partida...</p>'}
         <h2 class="sect">JOGADORES NA SALA · ${members.length}</h2>
         <ul class="room-members">
           ${members.map((m) => `<li class="${m.ready ? 'ready' : ''}"><b>${esc(m.name)}</b>${netBadge(m.key)}<span>${m.ready ? 'PRONTO' : 'A PREPARAR...'}</span></li>`).join('')}
@@ -691,7 +692,9 @@ export class Lobby {
   }
 
   private startRoomMatch() {
-    if (!this.currentRoom || !this.net || !this.authUserId) return;
+    // Only the room's creator may start the match — everyone else waits for
+    // the 'start' message this sends them (see onRoomNetMessage).
+    if (!this.currentRoom || !this.net || !this.authUserId || this.currentRoom.host_id !== this.authUserId) return;
     const seed = (Math.random() * 1e9) | 0;
     const others = this.roomMembers.filter((m) => m.key !== this.authUserId).map((m) => ({ id: m.key, name: m.name }));
     const map = this.currentRoom.map as MapId;
