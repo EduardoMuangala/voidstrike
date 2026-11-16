@@ -250,6 +250,7 @@ export class Match {
     } else if (this.mode === 'squad') {
       this.setupArena();
       const netPlayers = opts.netPlayers || [];
+      const isRoom = !!opts.net;
       const allySlots = 3;
       for (let i = 0; i < Math.min(netPlayers.length, allySlots); i++) {
         const peer = netPlayers[i];
@@ -258,8 +259,11 @@ export class Match {
         this.actors.push(a);
         this.netActorByPeer.set(peer.id, a);
       }
-      for (let i = netPlayers.length; i < allySlots; i++) mkBot(0);
-      for (let i = 0; i < 4; i++) mkBot(1);
+      // Live rooms are real people only — no bots padding out the teams.
+      if (!isRoom) {
+        for (let i = netPlayers.length; i < allySlots; i++) mkBot(0);
+        for (let i = 0; i < 4; i++) mkBot(1);
+      }
       for (const a of this.actors) {
         if (a.isPlayer) {
           a.give(0, profile.loadout[0], profile.weaponSkins[profile.loadout[0]] || 'default');
