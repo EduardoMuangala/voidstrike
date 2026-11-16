@@ -569,11 +569,15 @@ body:not(.ingame) #app {
 .auth-msg.bad { color: var(--red); }
 
 /* ============================================================== ROOMS */
+.rooms-scroll { flex: 1; min-height: 0; overflow-y: auto; touch-action: pan-y; padding: 2px 12px 16px; display: flex; flex-direction: column; gap: 10px; scrollbar-width: thin; scrollbar-color: #333 transparent; }
+.sect { font-family: var(--head); font-weight: 500; font-size: 20px; letter-spacing: 2px; color: var(--muted); }
+.tip { font-size: 12px; letter-spacing: 0.3px; line-height: 1.5; color: var(--muted); }
+.room-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 .room-card .room-code { margin-top: 2px; font-family: var(--head); font-size: 15px; letter-spacing: 2px; color: var(--acc); }
 .room-code-big { display: flex; align-items: center; gap: 8px; font-size: 13px; letter-spacing: 1.5px; color: var(--muted); }
 .room-code-big b { font-family: var(--head); font-size: 30px; letter-spacing: 6px; color: var(--acc); }
 .btn-primary.on { filter: brightness(0.75); }
-.room-members { list-style: none; display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+.room-members { list-style: none; display: flex; flex-direction: column; flex: none; gap: 4px; margin: 4px 0; }
 .room-members li { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: rgba(255, 255, 255, 0.04); border-left: 3px solid var(--muted); font-size: 14px; }
 .room-members li.ready { border-color: var(--green); }
 .room-members li span { font-size: 11px; letter-spacing: 1px; color: var(--muted); }
