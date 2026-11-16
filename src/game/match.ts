@@ -80,7 +80,7 @@ const ZONE_PHASES = [
   { wait: 15, shrink: 14, r: 0, dps: 16 },
 ];
 const ARMOR_RED = [0, 0.2, 0.3, 0.42];
-const ARENA_R = 52;
+export const ARENA_R = 52;
 
 const tA = new THREE.Vector3();
 const tB = new THREE.Vector3();
@@ -91,6 +91,15 @@ const ringGeo = new THREE.RingGeometry(0.45, 0.6, 20).rotateX(-Math.PI / 2);
 
 const pick = <T>(a: T[]) => a[(Math.random() * a.length) | 0];
 const angDiff = (a: number, b: number) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+
+/** Squad mode's arena is picked from the map's seeded RNG (not Math.random)
+ * so the host and every room guest — all building an identical World from
+ * the same seed — land on the exact same arena without needing a message. */
+export function pickArena(world: World): Poi | null {
+  const names = world.def.arenas;
+  if (!names.length) return null;
+  return world.pois.find((p) => p.name === names[(world.R() * names.length) | 0]) || world.pois[0];
+}
 const netFwd = (yaw: number, pitch: number, out: THREE.Vector3) => out.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
 
 function randomOutfit(): Outfit {
@@ -396,13 +405,12 @@ export class Match {
   }
 
   private setupArena() {
-    const names = this.world.def.arenas;
-    const poi = this.world.pois.find((p) => p.name === pick(names)) || this.world.pois[0];
+    const poi = pickArena(this.world) || this.world.pois[0];
     this.arena = poi;
     this.world.cx = poi.x;
     this.world.cz = poi.z;
     this.world.clampR = ARENA_R;
-    const ang = Math.random() * Math.PI * 2;
+    const ang = this.world.R() * Math.PI * 2;
     for (const [list, s] of [[this.world.spawnsA, 1], [this.world.spawnsB, -1]] as const) {
       for (let i = 0; i < 4; i++) {
         const off = (i - 1.5) * 4;
