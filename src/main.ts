@@ -1,7 +1,8 @@
 import './style.css';
 import * as THREE from 'three';
 import { profile } from './save';
-import { getSession } from './auth';
+import { getSession, usernameOf } from './auth';
+import { syncAccount, flushSync } from './cloudProfile';
 import { AuthScreen } from './ui/auth';
 import { Lobby, type NetPlayOpts } from './ui/lobby';
 import { Match } from './game/match';
@@ -115,6 +116,7 @@ function boot() {
 addEventListener('resize', applySize);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && match && !match.over && !match.isRoom) match.setPaused(true);
+  if (document.hidden) void flushSync();
 });
 applySize();
 
@@ -136,7 +138,14 @@ function frame(now: number) {
 }
 requestAnimationFrame(frame);
 
-getSession().then((session) => {
-  if (session) boot();
-  else new AuthScreen(ui, boot);
+getSession().then(async (session) => {
+  if (session) {
+    await syncAccount(session.user.id, usernameOf(session.user));
+    boot();
+  } else {
+    new AuthScreen(ui, async (user) => {
+      await syncAccount(user.id, usernameOf(user));
+      boot();
+    });
+  }
 });

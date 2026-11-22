@@ -1,3 +1,4 @@
+import type { User } from '@supabase/supabase-js';
 import { signIn, signUp } from '../auth';
 
 type Mode = 'login' | 'register';
@@ -5,9 +6,9 @@ type Mode = 'login' | 'register';
 export class AuthScreen {
   el: HTMLElement;
   private mode: Mode = 'login';
-  private onDone: () => void;
+  private onDone: (user: User) => void | Promise<void>;
 
-  constructor(root: HTMLElement, onDone: () => void) {
+  constructor(root: HTMLElement, onDone: (user: User) => void | Promise<void>) {
     this.onDone = onDone;
     this.el = document.createElement('div');
     this.el.id = 'authscreen';
@@ -59,19 +60,23 @@ export class AuthScreen {
     btn.disabled = true;
     this.msg('', false);
     try {
+      let user: User;
       if (this.mode === 'register') {
         const username = String(data.get('username') || '').trim().slice(0, 14) || 'Operador';
         const res = await signUp(email, password, username);
-        if (!res.session) {
+        if (!res.session || !res.user) {
           this.msg('Conta criada! Confirma o teu email antes de entrares.', false);
           btn.disabled = false;
           return;
         }
+        user = res.user;
       } else {
-        await signIn(email, password);
+        const res = await signIn(email, password);
+        user = res.user;
       }
+      this.msg('A sincronizar os teus dados...', false);
+      await this.onDone(user);
       this.el.remove();
-      this.onDone();
     } catch (err) {
       this.msg(err instanceof Error ? err.message : 'Não foi possível entrar.');
       btn.disabled = false;

@@ -6,6 +6,7 @@ import {
 import { buy, canAfford, grantRewards, owns, profile, resetProfile, save, xpForLevel } from '../save';
 import { sfx, unlockAudio } from '../audio';
 import { signOut } from '../auth';
+import { flushSync, stopSync } from '../cloudProfile';
 import { supabase } from '../supabase';
 import { createRoom, deleteRoom, findRoomByCode, joinRoom, listRooms, subscribeRoomList, type Member, type RoomChannel, type RoomRow } from '../rooms';
 import { RoomNet, type PeerLink } from '../webrtc';
@@ -1005,6 +1006,8 @@ export class Lobby {
     );
     m.querySelector('#logoutBtn')!.addEventListener('click', () =>
       this.confirm('SAIR DA CONTA', 'Vais voltar ao ecrã de login.', async () => {
+        await flushSync();
+        stopSync();
         await signOut();
         location.reload();
       }),

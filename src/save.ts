@@ -34,6 +34,14 @@ export interface Profile {
 const KEY = 'voidstrike.profile.v3';
 const isTouch = typeof window !== 'undefined' && (matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window);
 
+let activeKey = KEY;
+let onSave: (() => void) | null = null;
+
+/** Called by the cloud-sync module whenever a logged-in save happens, so it can push to Supabase too. */
+export function setOnSave(fn: (() => void) | null) {
+  onSave = fn;
+}
+
 function fresh(): Profile {
   return {
     name: 'OPERADOR' + Math.floor(1000 + Math.random() * 9000),
@@ -56,33 +64,59 @@ function fresh(): Profile {
   };
 }
 
-function load(): Profile {
+function merge(base: Profile, p: Partial<Profile>): Profile {
+  return {
+    ...base,
+    ...p,
+    outfit: { ...base.outfit, ...(p.outfit || {}) },
+    stats: { ...base.stats, ...(p.stats || {}) },
+    settings: { ...base.settings, ...(p.settings || {}) },
+    owned: Array.from(new Set([...base.owned, ...(p.owned || [])])),
+  };
+}
+
+function loadKey(key: string): Profile {
   const base = fresh();
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return base;
-    const p = JSON.parse(raw) as Partial<Profile>;
-    return {
-      ...base,
-      ...p,
-      outfit: { ...base.outfit, ...(p.outfit || {}) },
-      stats: { ...base.stats, ...(p.stats || {}) },
-      settings: { ...base.settings, ...(p.settings || {}) },
-      owned: Array.from(new Set([...(base.owned), ...(p.owned || [])])),
-    };
+    return merge(base, JSON.parse(raw) as Partial<Profile>);
   } catch {
     return base;
   }
 }
 
-export const profile: Profile = load();
+export const profile: Profile = loadKey(activeKey);
 
 export function save() {
   try {
-    localStorage.setItem(KEY, JSON.stringify(profile));
+    localStorage.setItem(activeKey, JSON.stringify(profile));
   } catch {
     /* storage unavailable */
   }
+  onSave?.();
+}
+
+/**
+ * Switches local storage to a per-account namespace so two different
+ * accounts on the same browser never see each other's progress. The first
+ * time a given user logs in on this browser, any pre-login (legacy-key)
+ * progress is migrated into their namespaced save instead of being lost.
+ * Returns the profile data to reconcile against the cloud copy, if any.
+ */
+export function switchToUser(userId: string): Profile {
+  activeKey = `${KEY}.${userId}`;
+  const existing = localStorage.getItem(activeKey);
+  const loaded = existing ? loadKey(activeKey) : loadKey(KEY);
+  Object.assign(profile, loaded);
+  save();
+  return profile;
+}
+
+/** Applies cloud data on top of the current local profile (cloud wins on conflicting fields) and saves. */
+export function applyCloudProfile(p: Partial<Profile>) {
+  Object.assign(profile, merge(profile, p));
+  save();
 }
 
 export function resetProfile() {
