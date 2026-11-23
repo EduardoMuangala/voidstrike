@@ -115,7 +115,6 @@ function boot() {
 
 addEventListener('resize', applySize);
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && match && !match.over && !match.isRoom) match.setPaused(true);
   if (document.hidden) void flushSync();
 });
 applySize();

@@ -57,6 +57,8 @@ export class NetMatch {
   private onEndCb: (r: MatchResult) => void;
   private lastMsgT = 0;
   private pingAcc = 0;
+  private pauseEl: HTMLElement;
+  private menuOpen = false;
 
   constructor(opts: NetMatchOpts) {
     this.renderer = opts.renderer;
@@ -91,6 +93,14 @@ export class NetMatch {
     this.hud = new Hud(opts.root, 'squad');
     this.input = new Input(opts.canvas, this.hud.el);
     this.input.enabled = true;
+    // A match can't be paused — the host and everyone else keep playing — this menu only offers to leave.
+    this.pauseEl = document.createElement('div');
+    this.pauseEl.id = 'pausemenu';
+    this.pauseEl.innerHTML = `<div class="pbox"><h2>MENU</h2><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`;
+    this.pauseEl.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('[data-p]')) this.quit();
+    });
+    opts.root.appendChild(this.pauseEl);
     this.net.onMessage = (_from, data) => {
       this.lastMsgT = performance.now();
       this.onNet(data as NetMsg);
@@ -121,6 +131,14 @@ export class NetMatch {
     }
   }
 
+  private quit() {
+    if (this.over) return;
+    this.over = true;
+    this.menuOpen = false;
+    this.pauseEl.classList.remove('show');
+    this.onEndCb({ mode: 'squad', win: false, rank: 0, total: 0, kills: 0, damage: 0, time: 0, scoreA: 0, scoreB: 0, quit: true });
+  }
+
   update(dt: number) {
     if (this.over) return;
     if (performance.now() - this.lastMsgT > 8000) {
@@ -130,6 +148,14 @@ export class NetMatch {
       return;
     }
     const inp = this.input;
+    if (inp.take('pause')) {
+      this.menuOpen = !this.menuOpen;
+      this.pauseEl.classList.toggle('show', this.menuOpen);
+      if (this.menuOpen) {
+        inp.reset();
+        document.exitPointerLock?.();
+      }
+    }
     inp.poll();
     const [lx, ly] = inp.consumeLook();
     const sens = 0.0009 + profile.settings.sens * 0.00042;
@@ -226,6 +252,7 @@ export class NetMatch {
   }
 
   dispose() {
+    this.pauseEl.remove();
     this.input.dispose();
     this.hud.dispose();
     for (const rig of this.rigs.values()) rig.dispose();

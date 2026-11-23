@@ -134,7 +134,6 @@ export class Match {
   diff: Difficulty;
   time = 0;
   over = false;
-  paused = false;
   scoreA = 0;
   scoreB = 0;
   total = 0;
@@ -212,17 +211,16 @@ export class Match {
     this.input = new Input(opts.canvas, this.hud.el);
     this.input.enabled = true;
 
+    // A match can't actually be paused — bots/zone/net peers keep going either way —
+    // so this menu only offers to leave; tap the pause button again to dismiss it.
     this.pauseEl = document.createElement('div');
     this.pauseEl.id = 'pausemenu';
-    this.pauseEl.innerHTML = opts.net
-      ? `<div class="pbox"><h2>MENU</h2><p class="tip">É uma partida com outras pessoas — não dá para pausar.</p><button class="btn-primary" data-p="resume">CONTINUAR A JOGAR</button><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`
-      : `<div class="pbox"><h2>PAUSA</h2><button class="btn-primary" data-p="resume">CONTINUAR</button><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`;
+    this.pauseEl.innerHTML = `<div class="pbox"><h2>MENU</h2><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`;
     this.pauseEl.addEventListener('click', (e) => {
       const b = (e.target as HTMLElement).closest<HTMLElement>('[data-p]');
       if (!b) return;
       sfx.click();
-      if (b.dataset.p === 'resume') this.closeMenu();
-      else this.quit();
+      this.quit();
     });
     opts.root.appendChild(this.pauseEl);
 
@@ -568,10 +566,7 @@ export class Match {
   // =============================================================== main loop
   update(rawDt: number) {
     const dt = Math.min(rawDt, 0.05);
-    if (this.input.take('pause') && !this.over) {
-      if (this.net) this.toggleMenu();
-      else this.setPaused(!this.paused);
-    }
+    if (this.input.take('pause') && !this.over) this.toggleMenu();
     if (this.input.take('map')) this.mapOpen = !this.mapOpen;
     this.fpsAcc += rawDt;
     this.fpsN++;
@@ -585,10 +580,6 @@ export class Match {
         const pings = this.net.peers().map((p) => p.ping).filter((p): p is number => p !== null);
         this.hud.netPing(profile.settings.showPing && pings.length ? Math.max(...pings) : null);
       }
-    }
-    if (this.paused) {
-      this.input.consumeLook();
-      return;
     }
 
     if (this.replayOn) {
@@ -640,14 +631,7 @@ export class Match {
     this.camera.updateProjectionMatrix();
   }
 
-  setPaused(p: boolean) {
-    this.paused = p;
-    this.pauseEl.classList.toggle('show', p);
-    this.input.reset();
-    if (p) document.exitPointerLock?.();
-  }
-
-  /** Room matches never freeze — other people are still playing — so this just shows/hides the overlay. */
+  /** A match can't be paused — bots/zone/net peers keep going either way — this just shows/hides the exit menu. */
   private toggleMenu() {
     this.menuOpen = !this.menuOpen;
     this.pauseEl.classList.toggle('show', this.menuOpen);
@@ -657,19 +641,9 @@ export class Match {
     }
   }
 
-  private closeMenu() {
-    if (this.net) {
-      this.menuOpen = false;
-      this.pauseEl.classList.remove('show');
-    } else this.setPaused(false);
-  }
-
-  get isRoom() {
-    return !!this.net;
-  }
-
   quit() {
-    this.setPaused(false);
+    this.menuOpen = false;
+    this.pauseEl.classList.remove('show');
     const r = { ...(this.result || this.makeResult(false)), quit: true };
     if (this.net && !this.over) this.net.broadcast(netEnd(r));
     this.finish(r);
