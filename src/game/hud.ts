@@ -1,5 +1,6 @@
 import { WEAPONS, type WeaponId } from '../data';
 import { isTouch } from './input';
+import { profile } from '../save';
 
 const ICON = {
   heal: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="3" fill="#fff"/><path d="M10 9h4v3h3v4h-3v3h-4v-3H7v-4h3z" fill="#e5383b"/><rect x="8" y="3" width="8" height="4" rx="1" fill="#fff"/></svg>',
@@ -31,7 +32,7 @@ export class Hud {
   constructor(parent: HTMLElement, mode: string) {
     const el = document.createElement('div');
     el.id = 'hud';
-    el.className = `mode-${mode} ${isTouch ? 'touch' : 'desk'}`;
+    el.className = `mode-${mode} ${isTouch ? 'touch' : 'desk'} ${profile.settings.leftFire ? 'lefty' : ''}`;
     el.innerHTML = `
       <div id="vignette"></div><div id="dmgflash"></div>
       <div id="tags"></div><div id="pops"></div>
@@ -42,6 +43,7 @@ export class Hud {
       <div class="hud-ui" id="topl">
         <button class="hbtn sm" data-act="pause">${ICON.pause}</button>
         <div id="fps"></div>
+        <div id="netping"></div>
       </div>
       <div id="topc">
         <div class="tstat" id="tsAlive"><span>VIVOS</span><b>0</b></div>
@@ -291,6 +293,14 @@ export class Hud {
 
   fps(v: number | null) {
     this.text('#fps', v === null ? '' : `${v} FPS`);
+  }
+
+  /** Room-match latency, shown next to the FPS counter. null hides it (offline/bot matches). */
+  netPing(ms: number | null) {
+    this.text('#netping', ms === null ? '' : `● ${ms}ms`);
+    this.set('netpingHidden', ms === null, () => this.$('#netping').classList.toggle('hidden', ms === null));
+    this.set('netpingBad', ms !== null && ms >= 120, () => this.$('#netping').classList.toggle('bad', ms !== null && ms >= 120));
+    this.set('netpingOk', ms !== null && ms >= 60 && ms < 120, () => this.$('#netping').classList.toggle('ok', ms !== null && ms >= 60 && ms < 120));
   }
 
   update(dt: number) {

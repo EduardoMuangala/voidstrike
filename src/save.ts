@@ -8,6 +8,7 @@ export interface Settings {
   quality: Quality;
   volume: number;
   showFps: boolean;
+  showPing: boolean;
   leftFire: boolean;
 }
 
@@ -55,7 +56,7 @@ function fresh(): Profile {
     weaponSkins: {},
     loadout: ['ar', 'smg'],
     stats: { matches: 0, wins: 0, kills: 0, best: 0 },
-    settings: { sens: 5, aimAssist: 2, quality: isTouch ? 'low' : 'medium', volume: 70, showFps: false, leftFire: true },
+    settings: { sens: 5, aimAssist: 2, quality: isTouch ? 'low' : 'medium', volume: 70, showFps: false, showPing: true, leftFire: false },
     lastDaily: 0,
     mode: 'br',
     map: 'solaris',

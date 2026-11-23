@@ -1,3 +1,5 @@
+import { profile } from '../save';
+
 export type Action = 'map' | 'reload' | 'slot0' | 'slot1' | 'slot2' | 'swap' | 'gel' | 'nade' | 'heal' | 'ability' | 'pickup' | 'pause' | 'jump' | 'crouch' | 'ads';
 
 export const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -99,7 +101,8 @@ export class Input {
         return;
       }
       if (t.closest('.hud-ui')) return;
-      if (e.clientX < innerWidth * 0.42 && this.joyId < 0) {
+      const inJoyZone = profile.settings.leftFire ? e.clientX > innerWidth * 0.58 : e.clientX < innerWidth * 0.42;
+      if (inJoyZone && this.joyId < 0) {
         this.joyId = e.pointerId;
         this.joyOx = e.clientX;
         this.joyOy = e.clientY;

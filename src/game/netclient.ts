@@ -56,6 +56,7 @@ export class NetMatch {
   private far: number;
   private onEndCb: (r: MatchResult) => void;
   private lastMsgT = 0;
+  private pingAcc = 0;
 
   constructor(opts: NetMatchOpts) {
     this.renderer = opts.renderer;
@@ -139,6 +140,12 @@ export class NetMatch {
       jump: inp.take('jump'), reload: inp.take('reload'), gel: inp.take('gel'), nade: inp.take('nade'), heal: inp.take('heal'),
       ability: inp.take('ability'), pickup: inp.take('pickup'), slot: inp.take('slot0') ? 0 : inp.take('slot1') ? 1 : inp.take('slot2') ? 2 : -1,
     });
+
+    this.pingAcc += dt;
+    if (this.pingAcc > 0.5) {
+      this.pingAcc = 0;
+      this.hud.netPing(profile.settings.showPing ? this.net.peers().find((p) => p.id === this.hostId)?.ping ?? null : null);
+    }
 
     this.fx.update(dt);
     this.world.updateVisibility(this.camera.position, this.far);

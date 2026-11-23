@@ -175,6 +175,11 @@ export class RoomNet {
     return this.links.get(peerId)?.status === 'connected';
   }
 
+  /** Current status/ping for every peer, polled on demand (e.g. once a second by the in-match HUD). */
+  peers(): PeerLink[] {
+    return Array.from(this.links.entries()).map(([id, l]) => ({ id, status: l.status, ping: l.ping }));
+  }
+
   private notify() {
     this.onUpdate(Array.from(this.links.entries()).map(([id, l]) => ({ id, status: l.status, ping: l.ping })));
   }

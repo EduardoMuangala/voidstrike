@@ -579,6 +579,12 @@ export class Match {
       this.hud.fps(profile.settings.showFps ? Math.round(this.fpsN / this.fpsAcc) : null);
       this.fpsAcc = 0;
       this.fpsN = 0;
+      if (this.net) {
+        // Star topology: the host can have several guests, so show the worst (highest)
+        // of their pings — that's the one affecting how stale anyone's view can get.
+        const pings = this.net.peers().map((p) => p.ping).filter((p): p is number => p !== null);
+        this.hud.netPing(profile.settings.showPing && pings.length ? Math.max(...pings) : null);
+      }
     }
     if (this.paused) {
       this.input.consumeLook();
