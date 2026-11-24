@@ -995,7 +995,7 @@ export class Lobby {
       geral: `
         <label>NOME<input data-set="name" maxlength="14" value="${esc(profile.name)}"/></label>
         <div class="keys">
-          <b>PC</b> WASD mover · RATO mirar · CLIQUE disparar · DIREITO zoom · ESPAÇO saltar · C agachar · R recarregar · 1/2/3 armas · E gelo · G granada · H curar · Q habilidade · F apanhar · M mapa · ESC pausa<br><b>OBSERVADOR</b> 1-5 câmaras · ←/→ jogador · R repetição · ESPAÇO/C subir/descer
+          <b>PC</b> WASD mover · RATO mirar · CLIQUE disparar · DIREITO zoom · ESPAÇO saltar · C agachar · R recarregar · 1/2/3 armas · E gelo · G granada · H curar · Q habilidade · F apanhar · M mapa · V falar com a equipa (premir) · ESC menu<br><b>OBSERVADOR</b> 1-5 câmaras · ←/→ jogador · R repetição · ESPAÇO/C subir/descer
         </div>`,
       controlos: `
         <label>SENSIBILIDADE <output>${s.sens}</output><input type="range" min="1" max="10" data-set="sens" value="${s.sens}"/></label>

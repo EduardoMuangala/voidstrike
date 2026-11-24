@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DEFAULT_OUTFIT, HEROES } from '../data';
 import { profile } from '../save';
 import { sfx } from '../audio';
+import { getMicTrack } from '../voice';
 import { CharacterRig } from '../models/character';
 import type { RoomNet } from '../webrtc';
 import type { MapId } from './maps';
@@ -59,6 +60,8 @@ export class NetMatch {
   private pingAcc = 0;
   private pauseEl: HTMLElement;
   private menuOpen = false;
+  private myTeam: number | null = null;
+  private voiceOn = false;
 
   constructor(opts: NetMatchOpts) {
     this.renderer = opts.renderer;
@@ -91,6 +94,7 @@ export class NetMatch {
       this.scene.add(this.zoneWall);
     }
     this.hud = new Hud(opts.root, 'squad');
+    this.hud.setVoiceAvailable(true);
     this.input = new Input(opts.canvas, this.hud.el);
     this.input.enabled = true;
     // A match can't be paused — the host and everyone else keep playing — this menu only offers to leave.
@@ -157,6 +161,15 @@ export class NetMatch {
       }
     }
     inp.poll();
+    // Host is always actor 0 on team 0 — talk to it only when we're on that same team.
+    const talk = inp.voiceHold && this.myTeam === 0;
+    if (talk !== this.voiceOn) {
+      this.voiceOn = talk;
+      this.hud.voice(talk);
+      const teammates = new Set(talk ? [this.hostId] : []);
+      if (talk) getMicTrack().then((track) => { if (this.voiceOn) this.net.setVoice(track, teammates); });
+      else this.net.setVoice(null, teammates);
+    }
     const [lx, ly] = inp.consumeLook();
     const sens = 0.0009 + profile.settings.sens * 0.00042;
     this.yaw -= lx * sens;
@@ -200,6 +213,7 @@ export class NetMatch {
       rig.update(dt, { speed: s.speed, crouch: s.crouch, air: !s.onGround, pitch: s.pitch, reload: 0, glide: s.dropping && !s.onGround, dead: false, vx: s.vx, vz: s.vz }, this.world.heightAt(s.x, s.z));
     }
     for (const [id, rig] of this.rigs) if (!seen.has(id)) rig.root.visible = false;
+    if (mine) this.myTeam = mine.team;
     this.updateCamera(mine);
     this.updateHud(mine);
   }

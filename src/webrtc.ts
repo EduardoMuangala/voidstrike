@@ -31,6 +31,8 @@ interface Link {
   status: PeerStatus;
   ping: number | null;
   pingTimer: number;
+  audioSender: RTCRtpSender | null;
+  audioEl: HTMLAudioElement | null;
 }
 
 /**
@@ -72,9 +74,11 @@ export class RoomNet {
   }
 
   private openLink(peerId: string): Link {
-    this.links.get(peerId)?.pc.close();
+    const old = this.links.get(peerId);
+    old?.pc.close();
+    old?.audioEl?.remove();
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const link: Link = { pc, dc: null, status: 'connecting', ping: null, pingTimer: 0 };
+    const link: Link = { pc, dc: null, status: 'connecting', ping: null, pingTimer: 0, audioSender: null, audioEl: null };
     this.links.set(peerId, link);
     pc.onicecandidate = (e) => {
       if (e.candidate) this.send({ to: peerId, from: this.selfId, kind: 'ice', candidate: e.candidate.toJSON() });
@@ -83,6 +87,21 @@ export class RoomNet {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') {
         link.status = 'closed';
         this.notify();
+      }
+    };
+    // Reserve the audio m-line up front (muted — no track — until a push-to-talk
+    // press hands it one via setVoice) so sending voice never needs renegotiation.
+    link.audioSender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+    pc.ontrack = (e) => {
+      // The transceiver is reserved up front (see above) and fires this before
+      // any real audio exists, with no associated stream yet — build one from
+      // the receiver's own track rather than relying on e.streams[0].
+      const audio = link.audioEl || new Audio();
+      audio.autoplay = true;
+      audio.srcObject = e.streams[0] || new MediaStream([e.track]);
+      if (!link.audioEl) {
+        link.audioEl = audio;
+        document.body.appendChild(audio);
       }
     };
     return link;
@@ -136,6 +155,10 @@ export class RoomNet {
       const link = this.openLink(msg.from);
       link.pc.ondatachannel = (e) => this.wireDataChannel(msg.from, e.channel);
       await link.pc.setRemoteDescription(msg.sdp!);
+      // Chromium answers "recvonly" for an audio transceiver with no track attached
+      // yet, even though it was created with direction 'sendrecv' — force it back
+      // so the host can still push voice into it later via replaceTrack.
+      for (const t of link.pc.getTransceivers()) if (t.receiver.track.kind === 'audio') t.direction = 'sendrecv';
       const answer = await link.pc.createAnswer();
       await link.pc.setLocalDescription(answer);
       this.send({ to: msg.from, from: this.selfId, kind: 'answer', sdp: link.pc.localDescription! });
@@ -180,6 +203,19 @@ export class RoomNet {
     return Array.from(this.links.entries()).map(([id, l]) => ({ id, status: l.status, ping: l.ping }));
   }
 
+  /**
+   * Push-to-talk, filtered per peer: `track` is the local mic track (or null when not
+   * holding the talk button/key), `teammateIds` says who should actually hear it — every
+   * connection already has an audio slot reserved (see openLink), so this never needs to
+   * renegotiate, just swap what each one is sending.
+   */
+  setVoice(track: MediaStreamTrack | null, teammateIds: ReadonlySet<string>) {
+    for (const [id, link] of this.links) {
+      const want = track && teammateIds.has(id) ? track : null;
+      if (link.audioSender && link.audioSender.track !== want) link.audioSender.replaceTrack(want).catch(() => {});
+    }
+  }
+
   private notify() {
     this.onUpdate(Array.from(this.links.entries()).map(([id, l]) => ({ id, status: l.status, ping: l.ping })));
   }
@@ -189,6 +225,7 @@ export class RoomNet {
       clearInterval(link.pingTimer);
       link.dc?.close();
       link.pc.close();
+      link.audioEl?.remove();
     }
     this.links.clear();
     supabase.removeChannel(this.channel);

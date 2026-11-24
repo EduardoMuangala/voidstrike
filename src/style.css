@@ -331,6 +331,9 @@ body:not(.ingame) #app {
 #netping { font-size: 12px; font-weight: 700; color: #6dff9e; text-shadow: 0 1px 2px #000; }
 #netping.ok { color: #ffd34d; }
 #netping.bad { color: #ff5a5a; }
+#voiceind { display: none; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #ff5a6a; text-shadow: 0 1px 2px #000; }
+#voiceind svg { width: 14px; height: 14px; }
+#voiceind.on { display: flex; animation: pulse2 0.6s infinite; }
 #netping.hidden { display: none; }
 #topc { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); display: flex; gap: 6px; }
 .tstat { display: flex; align-items: baseline; gap: 6px; padding: 3px 12px; background: rgba(8, 10, 16, 0.6); border-bottom: 2px solid var(--acc); }
@@ -425,6 +428,9 @@ body:not(.ingame) #app {
 #tbCrouch { right: calc(140px + var(--safe-r)); bottom: 18px; }
 #tbReload { right: calc(146px + var(--safe-r)); bottom: 92px; }
 #tbAds { right: calc(98px + var(--safe-r)); bottom: 196px; }
+#tbVoice { display: none; right: calc(22px + var(--safe-r)); top: 170px; }
+#hud.hasvoice.touch #tbVoice { display: grid; }
+#tbVoice.on, #tbVoice.down { background: rgba(255, 70, 90, 0.45); border-color: #ff8090; }
 
 /* Canhoto: disparo/stick de rodar à esquerda, mover à direita (espelha o cluster de tiro). */
 #hud.lefty #joy { left: auto; right: calc(110px + var(--safe-r)); }

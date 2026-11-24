@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { HEROES, ITEMS, PRIMARY_IDS, SLOTS, WEAPONS, type AbilityId, type Difficulty, type ModeId, type Outfit, type WeaponDef, type WeaponId } from '../data';
 import { profile } from '../save';
 import { sfx } from '../audio';
+import { getMicTrack } from '../voice';
 import { box, cyl, glow, mat, sphere } from '../models/materials';
 import { weaponMesh } from '../models/weapon';
 import { Actor, RADIUS } from './actor';
@@ -156,6 +157,8 @@ export class Match {
   private net: RoomNet | null = null;
   private netInputs = new Map<string, NetInputMsg>();
   private netActorByPeer = new Map<string, Actor>();
+  private teammateIds = new Set<string>();
+  private voiceOn = false;
   private netAcc = 0;
   far: number;
   private camDist = 3;
@@ -273,7 +276,9 @@ export class Match {
         this.actors.push(a);
         this.netActorByPeer.set(peer.id, a);
         teamCount[team]++;
+        if (team === p.team) this.teammateIds.add(peer.id);
       }
+      if (this.teammateIds.size) this.hud.setVoiceAvailable(true);
       // Live rooms are real people only — no bots padding out the teams.
       if (!isRoom) {
         for (let i = teamCount[0]; i < 4; i++) mkBot(0);
@@ -579,6 +584,15 @@ export class Match {
         // of their pings — that's the one affecting how stale anyone's view can get.
         const pings = this.net.peers().map((p) => p.ping).filter((p): p is number => p !== null);
         this.hud.netPing(profile.settings.showPing && pings.length ? Math.max(...pings) : null);
+      }
+    }
+    if (this.net && this.teammateIds.size) {
+      const talk = this.input.voiceHold;
+      if (talk !== this.voiceOn) {
+        this.voiceOn = talk;
+        this.hud.voice(talk);
+        if (talk) getMicTrack().then((track) => { if (this.voiceOn) this.net?.setVoice(track, this.teammateIds); });
+        else this.net.setVoice(null, this.teammateIds);
       }
     }
 
