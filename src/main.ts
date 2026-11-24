@@ -68,6 +68,7 @@ function startRoomMatch(opts: NetPlayOpts) {
         seed: opts.seed,
         hostId: opts.hostId,
         selfActorId: opts.selfActorId!,
+        selfPeerId: opts.selfPeerId,
         onEnd: (r) => {
           netMatch?.dispose();
           netMatch = null;

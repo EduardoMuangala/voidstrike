@@ -20,6 +20,8 @@ export interface NetPlayOpts {
   hostId: string;
   netPlayers?: { id: string; name: string }[];
   selfActorId?: number;
+  /** This client's own WebRTC peer id — a guest needs it to mesh-connect to teammates for voice. */
+  selfPeerId: string;
 }
 import { CharacterRig } from '../models/character';
 import { glow, mat } from '../models/materials';
@@ -690,7 +692,7 @@ export class Lobby {
 
   private onRoomNetMessage(data: { t: string; seed: number; map: MapId; you: number }) {
     if (data.t !== 'start' || !this.currentRoom || !this.net) return;
-    this.onNetPlay({ isHost: false, net: this.net, map: data.map, seed: data.seed, hostId: this.currentRoom.host_id, selfActorId: data.you });
+    this.onNetPlay({ isHost: false, net: this.net, map: data.map, seed: data.seed, hostId: this.currentRoom.host_id, selfActorId: data.you, selfPeerId: this.authUserId! });
   }
 
   private startRoomMatch() {
@@ -702,7 +704,7 @@ export class Lobby {
     const map = this.currentRoom.map as MapId;
     others.forEach((o, i) => this.net!.sendTo(o.id, { t: 'start', seed, map, you: i + 1 }));
     sfx.buy();
-    this.onNetPlay({ isHost: true, net: this.net, map, seed, hostId: this.authUserId, netPlayers: others });
+    this.onNetPlay({ isHost: true, net: this.net, map, seed, hostId: this.authUserId, netPlayers: others, selfPeerId: this.authUserId });
   }
 
   private toggleReady() {

@@ -10,7 +10,7 @@ import { World, type Wall } from './world';
 import type { MapId, Poi } from './maps';
 import type { RoomNet } from '../webrtc';
 import type { NetInputMsg } from '../netproto';
-import { netSnap, netShot, netBoom, netKill, netEnd } from '../netproto';
+import { netSnap, netShot, netBoom, netKill, netEnd, netRoster } from '../netproto';
 import type { NetActorSnap } from '../netproto';
 import { Fx } from './fx';
 import { Hud, esc } from './hud';
@@ -267,6 +267,7 @@ export class Match {
       // The host is already team 0; split the other real people across both
       // teams as evenly as possible so a room of 2 is a 1v1, 4 is a 2v2, etc.
       const teamCount = [1, 0];
+      const roster: { id: string; team: number }[] = [];
       for (let i = 0; i < netPlayers.length; i++) {
         const peer = netPlayers[i];
         const team = teamCount[1] < teamCount[0] ? 1 : teamCount[0] < teamCount[1] ? 0 : i % 2 === 0 ? 1 : 0;
@@ -276,9 +277,19 @@ export class Match {
         this.actors.push(a);
         this.netActorByPeer.set(peer.id, a);
         teamCount[team]++;
+        roster.push({ id: peer.id, team });
         if (team === p.team) this.teammateIds.add(peer.id);
       }
       if (this.teammateIds.size) this.hud.setVoiceAvailable(true);
+      if (roster.length) {
+        // Lets every guest mesh-connect directly to its teammates for voice (the star
+        // only gives everyone a link to the host). Sent a few times in case the first
+        // copy races a guest's own match setup and arrives before it's listening.
+        const sendRoster = () => { if (!this.over) this.net?.broadcast(netRoster(roster)); };
+        sendRoster();
+        setTimeout(sendRoster, 500);
+        setTimeout(sendRoster, 1500);
+      }
       // Live rooms are real people only — no bots padding out the teams.
       if (!isRoom) {
         for (let i = teamCount[0]; i < 4; i++) mkBot(0);

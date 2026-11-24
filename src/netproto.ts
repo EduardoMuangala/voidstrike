@@ -101,7 +101,18 @@ export interface NetEndMsg {
   result: MatchResult;
 }
 
-export type NetMsg = NetInputMsg | NetStartMsg | NetSnapMsg | NetShotMsg | NetBoomMsg | NetGlooMsg | NetKillMsg | NetEndMsg;
+/**
+ * Who's on which team, by their WebRTC peer id (the room/webrtc.ts id, not the
+ * numeric in-match actor id a NetActorSnap carries). The host sends this once
+ * match teams are assigned so guests can mesh-connect directly to teammates
+ * for voice — the star topology only gives everyone a link to the host.
+ */
+export interface NetRosterMsg {
+  t: 'roster';
+  players: { id: string; team: number }[];
+}
+
+export type NetMsg = NetInputMsg | NetStartMsg | NetSnapMsg | NetShotMsg | NetBoomMsg | NetGlooMsg | NetKillMsg | NetEndMsg | NetRosterMsg;
 
 export const netStart = (seed: number, map: MapId, mode: ModeId, you: number): NetStartMsg => ({ t: 'start', seed, map, mode, you });
 export const netSnap = (time: number, scoreA: number, scoreB: number, actors: NetActorSnap[]): NetSnapMsg => ({ t: 'snap', time, scoreA, scoreB, actors });
@@ -109,3 +120,4 @@ export const netShot = (a: { x: number; y: number; z: number }, b: { x: number; 
 export const netBoom = (p: { x: number; y: number; z: number }): NetBoomMsg => ({ t: 'boom', p: [p.x, p.y, p.z] });
 export const netKill = (killer: string, victim: string, weapon: string): NetKillMsg => ({ t: 'kill', killer, victim, weapon });
 export const netEnd = (result: MatchResult): NetEndMsg => ({ t: 'end', result });
+export const netRoster = (players: { id: string; team: number }[]): NetRosterMsg => ({ t: 'roster', players });
