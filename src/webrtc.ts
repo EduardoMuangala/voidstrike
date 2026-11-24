@@ -14,6 +14,8 @@ interface SignalMsg {
   kind: 'offer' | 'answer' | 'ice';
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
+  /** A teammate-to-teammate voice-only connection (see meshLinks), not the host star link. */
+  mesh?: boolean;
 }
 
 interface RelayMsg {
@@ -31,6 +33,8 @@ interface Link {
   status: PeerStatus;
   ping: number | null;
   pingTimer: number;
+  audioSender: RTCRtpSender | null;
+  audioEl: HTMLAudioElement | null;
 }
 
 /**
@@ -48,6 +52,8 @@ interface Link {
 export class RoomNet {
   private channel: ReturnType<typeof supabase.channel>;
   private links = new Map<string, Link>();
+  /** Voice-only connections directly between teammates (the star above only links everyone to the host). */
+  private meshLinks = new Map<string, Link>();
   onUpdate: (peers: PeerLink[]) => void = () => {};
   onMessage: (fromId: string, data: unknown) => void = () => {};
 
@@ -71,13 +77,17 @@ export class RoomNet {
     this.channel.send({ type: 'broadcast', event: 'signal', payload: msg });
   }
 
-  private openLink(peerId: string): Link {
-    this.links.get(peerId)?.pc.close();
+  /** Reserves the audio m-line up front (no track yet) on a fresh connection, for either the
+   *  star (host) link or a teammate mesh link — sending voice later never needs renegotiation. */
+  private newLink(peerId: string, map: Map<string, Link>, onIce: (candidate: RTCIceCandidateInit) => void): Link {
+    const old = map.get(peerId);
+    old?.pc.close();
+    old?.audioEl?.remove();
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const link: Link = { pc, dc: null, status: 'connecting', ping: null, pingTimer: 0 };
-    this.links.set(peerId, link);
+    const link: Link = { pc, dc: null, status: 'connecting', ping: null, pingTimer: 0, audioSender: null, audioEl: null };
+    map.set(peerId, link);
     pc.onicecandidate = (e) => {
-      if (e.candidate) this.send({ to: peerId, from: this.selfId, kind: 'ice', candidate: e.candidate.toJSON() });
+      if (e.candidate) onIce(e.candidate.toJSON());
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') {
@@ -85,7 +95,48 @@ export class RoomNet {
         this.notify();
       }
     };
+    link.audioSender = pc.addTransceiver('audio', { direction: 'sendrecv' }).sender;
+    pc.ontrack = (e) => {
+      // The transceiver is reserved up front (see above) and fires this before
+      // any real audio exists, with no associated stream yet — build one from
+      // the receiver's own track rather than relying on e.streams[0].
+      const audio = link.audioEl || new Audio();
+      audio.autoplay = true;
+      audio.srcObject = e.streams[0] || new MediaStream([e.track]);
+      if (!link.audioEl) {
+        link.audioEl = audio;
+        document.body.appendChild(audio);
+      }
+    };
     return link;
+  }
+
+  private openLink(peerId: string): Link {
+    return this.newLink(peerId, this.links, (candidate) => this.send({ to: peerId, from: this.selfId, kind: 'ice', candidate }));
+  }
+
+  private openMeshLink(peerId: string): Link {
+    return this.newLink(peerId, this.meshLinks, (candidate) => this.send({ to: peerId, from: this.selfId, kind: 'ice', candidate, mesh: true }));
+  }
+
+  /**
+   * Opens a direct voice-only connection to each given teammate (skipping the host and
+   * anyone already linked) — the star above only connects everyone to the host, so two
+   * guests on the same team need this to hear each other. Whoever's id sorts first sends
+   * the offer, so both sides don't race to connect at once.
+   */
+  connectMesh(teammatePeerIds: string[]) {
+    for (const peerId of teammatePeerIds) {
+      if (peerId === this.selfId || peerId === this.hostId || this.meshLinks.has(peerId)) continue;
+      if (this.selfId < peerId) this.openMeshOffer(peerId);
+    }
+  }
+
+  private async openMeshOffer(peerId: string) {
+    const link = this.openMeshLink(peerId);
+    const offer = await link.pc.createOffer();
+    await link.pc.setLocalDescription(offer);
+    this.send({ to: peerId, from: this.selfId, kind: 'offer', sdp: link.pc.localDescription!, mesh: true });
   }
 
   private wireDataChannel(peerId: string, dc: RTCDataChannel) {
@@ -132,10 +183,12 @@ export class RoomNet {
 
   private async onSignal(msg: SignalMsg) {
     if (msg.to !== this.selfId) return;
+    if (msg.mesh) return this.onMeshSignal(msg);
     if (msg.kind === 'offer' && this.isHost) {
       const link = this.openLink(msg.from);
       link.pc.ondatachannel = (e) => this.wireDataChannel(msg.from, e.channel);
       await link.pc.setRemoteDescription(msg.sdp!);
+      this.forceSendrecv(link.pc);
       const answer = await link.pc.createAnswer();
       await link.pc.setLocalDescription(answer);
       this.send({ to: msg.from, from: this.selfId, kind: 'answer', sdp: link.pc.localDescription! });
@@ -144,6 +197,28 @@ export class RoomNet {
     } else if (msg.kind === 'ice') {
       await this.links.get(msg.from)?.pc.addIceCandidate(msg.candidate!).catch(() => {});
     }
+  }
+
+  private async onMeshSignal(msg: SignalMsg) {
+    if (msg.kind === 'offer') {
+      const link = this.openMeshLink(msg.from);
+      await link.pc.setRemoteDescription(msg.sdp!);
+      this.forceSendrecv(link.pc);
+      const answer = await link.pc.createAnswer();
+      await link.pc.setLocalDescription(answer);
+      this.send({ to: msg.from, from: this.selfId, kind: 'answer', sdp: link.pc.localDescription!, mesh: true });
+    } else if (msg.kind === 'answer') {
+      await this.meshLinks.get(msg.from)?.pc.setRemoteDescription(msg.sdp!);
+    } else if (msg.kind === 'ice') {
+      await this.meshLinks.get(msg.from)?.pc.addIceCandidate(msg.candidate!).catch(() => {});
+    }
+  }
+
+  /** Chromium answers "recvonly" for an audio transceiver with no track attached yet,
+   *  even though it was created with direction 'sendrecv' — force it back so we can
+   *  still push voice into it later via replaceTrack. */
+  private forceSendrecv(pc: RTCPeerConnection) {
+    for (const t of pc.getTransceivers()) if (t.receiver.track.kind === 'audio') t.direction = 'sendrecv';
   }
 
   /** Send to everyone directly connected (for the host: all guests; for a guest: just the host). */
@@ -175,6 +250,28 @@ export class RoomNet {
     return this.links.get(peerId)?.status === 'connected';
   }
 
+  /** Current status/ping for every peer, polled on demand (e.g. once a second by the in-match HUD). */
+  peers(): PeerLink[] {
+    return Array.from(this.links.entries()).map(([id, l]) => ({ id, status: l.status, ping: l.ping }));
+  }
+
+  /**
+   * Push-to-talk, filtered per peer: `track` is the local mic track (or null when not
+   * holding the talk button/key), `teammateIds` says who should actually hear it — every
+   * connection already has an audio slot reserved (see openLink), so this never needs to
+   * renegotiate, just swap what each one is sending.
+   */
+  setVoice(track: MediaStreamTrack | null, teammateIds: ReadonlySet<string>) {
+    for (const map of [this.links, this.meshLinks]) {
+      for (const [id, link] of map) {
+        // Every meshLinks entry is a teammate by construction (see connectMesh), so this
+        // only really filters this.links, where the host is linked to allies and foes alike.
+        const want = track && teammateIds.has(id) ? track : null;
+        if (link.audioSender && link.audioSender.track !== want) link.audioSender.replaceTrack(want).catch(() => {});
+      }
+    }
+  }
+
   private notify() {
     this.onUpdate(Array.from(this.links.entries()).map(([id, l]) => ({ id, status: l.status, ping: l.ping })));
   }
@@ -184,6 +281,7 @@ export class RoomNet {
       clearInterval(link.pingTimer);
       link.dc?.close();
       link.pc.close();
+      link.audioEl?.remove();
     }
     this.links.clear();
     supabase.removeChannel(this.channel);

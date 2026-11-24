@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { HEROES, ITEMS, PRIMARY_IDS, SLOTS, WEAPONS, type AbilityId, type Difficulty, type ModeId, type Outfit, type WeaponDef, type WeaponId } from '../data';
 import { profile } from '../save';
 import { sfx } from '../audio';
+import { getMicTrack } from '../voice';
 import { box, cyl, glow, mat, sphere } from '../models/materials';
 import { weaponMesh } from '../models/weapon';
 import { Actor, RADIUS } from './actor';
@@ -9,7 +10,7 @@ import { World, type Wall } from './world';
 import type { MapId, Poi } from './maps';
 import type { RoomNet } from '../webrtc';
 import type { NetInputMsg } from '../netproto';
-import { netSnap, netShot, netBoom, netKill, netEnd } from '../netproto';
+import { netSnap, netShot, netBoom, netKill, netEnd, netRoster } from '../netproto';
 import type { NetActorSnap } from '../netproto';
 import { Fx } from './fx';
 import { Hud, esc } from './hud';
@@ -134,7 +135,6 @@ export class Match {
   diff: Difficulty;
   time = 0;
   over = false;
-  paused = false;
   scoreA = 0;
   scoreB = 0;
   total = 0;
@@ -157,6 +157,8 @@ export class Match {
   private net: RoomNet | null = null;
   private netInputs = new Map<string, NetInputMsg>();
   private netActorByPeer = new Map<string, Actor>();
+  private teammateIds = new Set<string>();
+  private voiceOn = false;
   private netAcc = 0;
   far: number;
   private camDist = 3;
@@ -212,17 +214,16 @@ export class Match {
     this.input = new Input(opts.canvas, this.hud.el);
     this.input.enabled = true;
 
+    // A match can't actually be paused — bots/zone/net peers keep going either way —
+    // so this menu only offers to leave; tap the pause button again to dismiss it.
     this.pauseEl = document.createElement('div');
     this.pauseEl.id = 'pausemenu';
-    this.pauseEl.innerHTML = opts.net
-      ? `<div class="pbox"><h2>MENU</h2><p class="tip">É uma partida com outras pessoas — não dá para pausar.</p><button class="btn-primary" data-p="resume">CONTINUAR A JOGAR</button><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`
-      : `<div class="pbox"><h2>PAUSA</h2><button class="btn-primary" data-p="resume">CONTINUAR</button><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`;
+    this.pauseEl.innerHTML = `<div class="pbox"><h2>MENU</h2><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`;
     this.pauseEl.addEventListener('click', (e) => {
       const b = (e.target as HTMLElement).closest<HTMLElement>('[data-p]');
       if (!b) return;
       sfx.click();
-      if (b.dataset.p === 'resume') this.closeMenu();
-      else this.quit();
+      this.quit();
     });
     opts.root.appendChild(this.pauseEl);
 
@@ -266,6 +267,7 @@ export class Match {
       // The host is already team 0; split the other real people across both
       // teams as evenly as possible so a room of 2 is a 1v1, 4 is a 2v2, etc.
       const teamCount = [1, 0];
+      const roster: { id: string; team: number }[] = [];
       for (let i = 0; i < netPlayers.length; i++) {
         const peer = netPlayers[i];
         const team = teamCount[1] < teamCount[0] ? 1 : teamCount[0] < teamCount[1] ? 0 : i % 2 === 0 ? 1 : 0;
@@ -275,6 +277,18 @@ export class Match {
         this.actors.push(a);
         this.netActorByPeer.set(peer.id, a);
         teamCount[team]++;
+        roster.push({ id: peer.id, team });
+        if (team === p.team) this.teammateIds.add(peer.id);
+      }
+      if (this.teammateIds.size) this.hud.setVoiceAvailable(true);
+      if (roster.length) {
+        // Lets every guest mesh-connect directly to its teammates for voice (the star
+        // only gives everyone a link to the host). Sent a few times in case the first
+        // copy races a guest's own match setup and arrives before it's listening.
+        const sendRoster = () => { if (!this.over) this.net?.broadcast(netRoster(roster)); };
+        sendRoster();
+        setTimeout(sendRoster, 500);
+        setTimeout(sendRoster, 1500);
       }
       // Live rooms are real people only — no bots padding out the teams.
       if (!isRoom) {
@@ -568,10 +582,7 @@ export class Match {
   // =============================================================== main loop
   update(rawDt: number) {
     const dt = Math.min(rawDt, 0.05);
-    if (this.input.take('pause') && !this.over) {
-      if (this.net) this.toggleMenu();
-      else this.setPaused(!this.paused);
-    }
+    if (this.input.take('pause') && !this.over) this.toggleMenu();
     if (this.input.take('map')) this.mapOpen = !this.mapOpen;
     this.fpsAcc += rawDt;
     this.fpsN++;
@@ -579,10 +590,21 @@ export class Match {
       this.hud.fps(profile.settings.showFps ? Math.round(this.fpsN / this.fpsAcc) : null);
       this.fpsAcc = 0;
       this.fpsN = 0;
+      if (this.net) {
+        // Star topology: the host can have several guests, so show the worst (highest)
+        // of their pings — that's the one affecting how stale anyone's view can get.
+        const pings = this.net.peers().map((p) => p.ping).filter((p): p is number => p !== null);
+        this.hud.netPing(profile.settings.showPing && pings.length ? Math.max(...pings) : null);
+      }
     }
-    if (this.paused) {
-      this.input.consumeLook();
-      return;
+    if (this.net && this.teammateIds.size) {
+      const talk = this.input.voiceHold;
+      if (talk !== this.voiceOn) {
+        this.voiceOn = talk;
+        this.hud.voice(talk);
+        if (talk) getMicTrack().then((track) => { if (this.voiceOn) this.net?.setVoice(track, this.teammateIds); });
+        else this.net.setVoice(null, this.teammateIds);
+      }
     }
 
     if (this.replayOn) {
@@ -634,14 +656,7 @@ export class Match {
     this.camera.updateProjectionMatrix();
   }
 
-  setPaused(p: boolean) {
-    this.paused = p;
-    this.pauseEl.classList.toggle('show', p);
-    this.input.reset();
-    if (p) document.exitPointerLock?.();
-  }
-
-  /** Room matches never freeze — other people are still playing — so this just shows/hides the overlay. */
+  /** A match can't be paused — bots/zone/net peers keep going either way — this just shows/hides the exit menu. */
   private toggleMenu() {
     this.menuOpen = !this.menuOpen;
     this.pauseEl.classList.toggle('show', this.menuOpen);
@@ -651,19 +666,9 @@ export class Match {
     }
   }
 
-  private closeMenu() {
-    if (this.net) {
-      this.menuOpen = false;
-      this.pauseEl.classList.remove('show');
-    } else this.setPaused(false);
-  }
-
-  get isRoom() {
-    return !!this.net;
-  }
-
   quit() {
-    this.setPaused(false);
+    this.menuOpen = false;
+    this.pauseEl.classList.remove('show');
     const r = { ...(this.result || this.makeResult(false)), quit: true };
     if (this.net && !this.over) this.net.broadcast(netEnd(r));
     this.finish(r);

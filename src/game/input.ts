@@ -1,4 +1,8 @@
+import { profile } from '../save';
+
 export type Action = 'map' | 'reload' | 'slot0' | 'slot1' | 'slot2' | 'swap' | 'gel' | 'nade' | 'heal' | 'ability' | 'pickup' | 'pause' | 'jump' | 'crouch' | 'ads';
+
+const VOICE_KEY = 'KeyV';
 
 export const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
@@ -11,6 +15,8 @@ export class Input {
   adsHold = false;
   adsToggle = false;
   crouchHold = false;
+  /** Push-to-talk: held while the voice key/button is down (room-match team voice). */
+  voiceHold = false;
   private keys = new Set<string>();
   private queue = new Set<Action>();
   private joyId = -1;
@@ -20,6 +26,7 @@ export class Input {
   private joyY = 0;
   private looks = new Map<number, { x: number; y: number }>();
   private fireTouches = new Set<number>();
+  private voiceTouches = new Set<number>();
   enabled = false;
   locked = false;
   private cleanup: (() => void)[] = [];
@@ -52,6 +59,8 @@ export class Input {
       this.keys.clear();
       this.fire = false;
       this.adsHold = false;
+      this.voiceTouches.clear();
+      this.voiceHold = false;
     });
 
     on(canvas, 'mousedown', (e: MouseEvent) => {
@@ -94,12 +103,15 @@ export class Input {
           this.looks.set(e.pointerId, { x: e.clientX, y: e.clientY });
         } else if (act === 'ads') {
           this.adsToggle = !this.adsToggle;
+        } else if (act === 'voice') {
+          this.voiceTouches.add(e.pointerId);
         } else this.queue.add(act as Action);
         e.preventDefault();
         return;
       }
       if (t.closest('.hud-ui')) return;
-      if (e.clientX < innerWidth * 0.42 && this.joyId < 0) {
+      const inJoyZone = profile.settings.leftFire ? e.clientX > innerWidth * 0.58 : e.clientX < innerWidth * 0.42;
+      if (inJoyZone && this.joyId < 0) {
         this.joyId = e.pointerId;
         this.joyOx = e.clientX;
         this.joyOy = e.clientY;
@@ -146,8 +158,11 @@ export class Input {
       }
       this.looks.delete(e.pointerId);
       if (this.fireTouches.delete(e.pointerId) && this.fireTouches.size === 0) this.fire = false;
+      this.voiceTouches.delete(e.pointerId);
       root.querySelectorAll('[data-act].down').forEach((b) => {
-        if (!this.fireTouches.size || (b as HTMLElement).dataset.act !== 'fire') b.classList.remove('down');
+        const act = (b as HTMLElement).dataset.act;
+        if ((act === 'fire' && this.fireTouches.size) || (act === 'voice' && this.voiceTouches.size)) return;
+        b.classList.remove('down');
       });
     };
     on(window, 'pointerup', up);
@@ -191,6 +206,7 @@ export class Input {
     this.mx = x;
     this.my = y;
     this.crouchHold = this.keys.has('ControlLeft');
+    this.voiceHold = this.keys.has(VOICE_KEY) || this.voiceTouches.size > 0;
   }
 
   key(code: string) {
@@ -216,11 +232,13 @@ export class Input {
     this.fire = false;
     this.adsHold = false;
     this.adsToggle = false;
+    this.voiceHold = false;
     this.lookX = this.lookY = 0;
     this.joyId = -1;
     this.joyX = this.joyY = 0;
     this.looks.clear();
     this.fireTouches.clear();
+    this.voiceTouches.clear();
     this.showJoy(false);
   }
 

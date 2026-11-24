@@ -68,6 +68,7 @@ function startRoomMatch(opts: NetPlayOpts) {
         seed: opts.seed,
         hostId: opts.hostId,
         selfActorId: opts.selfActorId!,
+        selfPeerId: opts.selfPeerId,
         onEnd: (r) => {
           netMatch?.dispose();
           netMatch = null;
@@ -115,7 +116,6 @@ function boot() {
 
 addEventListener('resize', applySize);
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && match && !match.over && !match.isRoom) match.setPaused(true);
   if (document.hidden) void flushSync();
 });
 applySize();

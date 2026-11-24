@@ -328,6 +328,13 @@ body:not(.ingame) #app {
 #topl { position: absolute; left: calc(12px + var(--safe-l)); top: 10px; display: flex; align-items: center; gap: 10px; }
 #topl .hbtn { width: 38px; height: 38px; border-radius: 6px; }
 #fps { font-size: 12px; color: #9fe; text-shadow: 0 1px 2px #000; }
+#netping { font-size: 12px; font-weight: 700; color: #6dff9e; text-shadow: 0 1px 2px #000; }
+#netping.ok { color: #ffd34d; }
+#netping.bad { color: #ff5a5a; }
+#voiceind { display: none; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #ff5a6a; text-shadow: 0 1px 2px #000; }
+#voiceind svg { width: 14px; height: 14px; }
+#voiceind.on { display: flex; animation: pulse2 0.6s infinite; }
+#netping.hidden { display: none; }
 #topc { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); display: flex; gap: 6px; }
 .tstat { display: flex; align-items: baseline; gap: 6px; padding: 3px 12px; background: rgba(8, 10, 16, 0.6); border-bottom: 2px solid var(--acc); }
 .tstat span { font-size: 10px; letter-spacing: 1.5px; color: var(--muted); }
@@ -421,6 +428,19 @@ body:not(.ingame) #app {
 #tbCrouch { right: calc(140px + var(--safe-r)); bottom: 18px; }
 #tbReload { right: calc(146px + var(--safe-r)); bottom: 92px; }
 #tbAds { right: calc(98px + var(--safe-r)); bottom: 196px; }
+#tbVoice { display: none; right: calc(22px + var(--safe-r)); top: 170px; }
+#hud.hasvoice.touch #tbVoice { display: grid; }
+#tbVoice.on, #tbVoice.down { background: rgba(255, 70, 90, 0.45); border-color: #ff8090; }
+
+/* Canhoto: disparo/stick de rodar à esquerda, mover à direita (espelha o cluster de tiro). */
+#hud.lefty #joy { left: auto; right: calc(110px + var(--safe-r)); }
+#hud.lefty .joyhint { left: auto; right: calc(110px + var(--safe-r)); transform: translateX(50%); }
+#hud.lefty .fire.main { right: auto; left: calc(34px + var(--safe-l)); }
+#hud.lefty .fire.left { left: auto; right: calc(28px + var(--safe-r)); }
+#hud.lefty #tbJump { right: auto; left: calc(30px + var(--safe-l)); }
+#hud.lefty #tbCrouch { right: auto; left: calc(140px + var(--safe-l)); }
+#hud.lefty #tbReload { right: auto; left: calc(146px + var(--safe-l)); }
+#hud.lefty #tbAds { right: auto; left: calc(98px + var(--safe-l)); }
 
 #hud.touch #utils { right: calc(214px + var(--safe-r)); bottom: auto; top: 70px; flex-direction: column; }
 #hud.touch #vitals { bottom: 64px; width: 260px; }

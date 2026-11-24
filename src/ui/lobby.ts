@@ -20,6 +20,8 @@ export interface NetPlayOpts {
   hostId: string;
   netPlayers?: { id: string; name: string }[];
   selfActorId?: number;
+  /** This client's own WebRTC peer id — a guest needs it to mesh-connect to teammates for voice. */
+  selfPeerId: string;
 }
 import { CharacterRig } from '../models/character';
 import { glow, mat } from '../models/materials';
@@ -43,6 +45,7 @@ export class Lobby {
   private stage = new THREE.Group();
   private page: Page = 'home';
   private storeTab: StoreTab = 'outfits';
+  private settingsTab: 'geral' | 'controlos' | 'audio' | 'hud' = 'geral';
   private slotTab: Slot = 'top';
   private sel: string | null = null;
   private previewHero: string | null = null;
@@ -689,7 +692,7 @@ export class Lobby {
 
   private onRoomNetMessage(data: { t: string; seed: number; map: MapId; you: number }) {
     if (data.t !== 'start' || !this.currentRoom || !this.net) return;
-    this.onNetPlay({ isHost: false, net: this.net, map: data.map, seed: data.seed, hostId: this.currentRoom.host_id, selfActorId: data.you });
+    this.onNetPlay({ isHost: false, net: this.net, map: data.map, seed: data.seed, hostId: this.currentRoom.host_id, selfActorId: data.you, selfPeerId: this.authUserId! });
   }
 
   private startRoomMatch() {
@@ -701,7 +704,7 @@ export class Lobby {
     const map = this.currentRoom.map as MapId;
     others.forEach((o, i) => this.net!.sendTo(o.id, { t: 'start', seed, map, you: i + 1 }));
     sfx.buy();
-    this.onNetPlay({ isHost: true, net: this.net, map, seed, hostId: this.authUserId, netPlayers: others });
+    this.onNetPlay({ isHost: true, net: this.net, map, seed, hostId: this.authUserId, netPlayers: others, selfPeerId: this.authUserId });
   }
 
   private toggleReady() {
@@ -908,6 +911,11 @@ export class Lobby {
     if (k === 'aim') s.aimAssist = Number(t.value);
     if (k === 'quality') s.quality = t.value as typeof s.quality;
     if (k === 'fps') s.showFps = t.checked;
+    if (k === 'ping') s.showPing = t.checked;
+    if (k === 'leftfire') {
+      s.leftFire = t.checked;
+      document.getElementById('hud')?.classList.toggle('lefty', s.leftFire);
+    }
     if (k === 'name') profile.name = t.value.replace(/[^\w\-À-ÿ ]/g, '').slice(0, 14).toUpperCase() || 'OPERADOR';
     const out = t.parentElement?.querySelector('output');
     if (out) out.textContent = t.value;
@@ -983,21 +991,37 @@ export class Lobby {
 
   private settingsModal() {
     const s = profile.settings;
-    const m = this.modal(`
-      <h2>DEFINIÇÕES</h2>
-      <div class="form">
+    const tab = this.settingsTab;
+    const tabBtn = (id: typeof this.settingsTab, label: string) => `<button class="tab ${tab === id ? 'on' : ''}" data-stab="${id}">${label}</button>`;
+    const panels: Record<typeof this.settingsTab, string> = {
+      geral: `
         <label>NOME<input data-set="name" maxlength="14" value="${esc(profile.name)}"/></label>
+        <div class="keys">
+          <b>PC</b> WASD mover · RATO mirar · CLIQUE disparar · DIREITO zoom · ESPAÇO saltar · C agachar · R recarregar · 1/2/3 armas · E gelo · G granada · H curar · Q habilidade · F apanhar · M mapa · V falar com a equipa (premir) · ESC menu<br><b>OBSERVADOR</b> 1-5 câmaras · ←/→ jogador · R repetição · ESPAÇO/C subir/descer
+        </div>`,
+      controlos: `
         <label>SENSIBILIDADE <output>${s.sens}</output><input type="range" min="1" max="10" data-set="sens" value="${s.sens}"/></label>
         <label>ASSISTÊNCIA DE MIRA <output>${s.aimAssist}</output><input type="range" min="0" max="3" data-set="aim" value="${s.aimAssist}"/></label>
-        <label>VOLUME <output>${s.volume}</output><input type="range" min="0" max="100" data-set="volume" value="${s.volume}"/></label>
-        <label>GRÁFICOS<select data-set="quality">${(['low', 'medium', 'high'] as const).map((q) => `<option value="${q}" ${s.quality === q ? 'selected' : ''}>${{ low: 'BAIXO (leve)', medium: 'MÉDIO', high: 'ALTO' }[q]}</option>`).join('')}</select></label>
+        <label class="chk"><input type="checkbox" data-set="leftfire" ${s.leftFire ? 'checked' : ''}/> BOTÃO DE DISPARO À ESQUERDA (CANHOTO)</label>`,
+      audio: `
+        <label>VOLUME <output>${s.volume}</output><input type="range" min="0" max="100" data-set="volume" value="${s.volume}"/></label>`,
+      hud: `
         <label class="chk"><input type="checkbox" data-set="fps" ${s.showFps ? 'checked' : ''}/> MOSTRAR FPS</label>
-      </div>
-      <div class="keys">
-        <b>PC</b> WASD mover · RATO mirar · CLIQUE disparar · DIREITO zoom · ESPAÇO saltar · C agachar · R recarregar · 1/2/3 armas · E gelo · G granada · H curar · Q habilidade · F apanhar · M mapa · ESC pausa<br><b>OBSERVADOR</b> 1-5 câmaras · ←/→ jogador · R repetição · ESPAÇO/C subir/descer
-      </div>
+        <label class="chk"><input type="checkbox" data-set="ping" ${s.showPing ? 'checked' : ''}/> MOSTRAR PING</label>
+        <label>GRÁFICOS<select data-set="quality">${(['low', 'medium', 'high'] as const).map((q) => `<option value="${q}" ${s.quality === q ? 'selected' : ''}>${{ low: 'BAIXO (leve)', medium: 'MÉDIO', high: 'ALTO' }[q]}</option>`).join('')}</select></label>`,
+    };
+    const m = this.modal(`
+      <h2>DEFINIÇÕES</h2>
+      <div class="tabs stabs">${tabBtn('geral', 'GERAL')}${tabBtn('controlos', 'CONTROLOS')}${tabBtn('audio', 'ÁUDIO')}${tabBtn('hud', 'HUD')}</div>
+      <div class="form">${panels[tab]}</div>
       <div class="mrow"><button class="btn-ghost danger" id="logoutBtn">SAIR DA CONTA</button><button class="btn-ghost danger" id="resetBtn">APAGAR PROGRESSO</button><button class="btn-primary" data-a="close">FECHAR</button></div>
     `);
+    m.querySelectorAll<HTMLElement>('[data-stab]').forEach((b) =>
+      b.addEventListener('click', () => {
+        this.settingsTab = b.dataset.stab as typeof this.settingsTab;
+        this.settingsModal();
+      }),
+    );
     m.querySelector('#resetBtn')!.addEventListener('click', () =>
       this.confirm('APAGAR PROGRESSO', 'Isto apaga nível, moedas e itens comprados. Continuar?', () => {
         resetProfile();

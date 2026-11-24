@@ -1,5 +1,6 @@
 import { WEAPONS, type WeaponId } from '../data';
 import { isTouch } from './input';
+import { profile } from '../save';
 
 const ICON = {
   heal: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="3" fill="#fff"/><path d="M10 9h4v3h3v4h-3v3h-4v-3H7v-4h3z" fill="#e5383b"/><rect x="8" y="3" width="8" height="4" rx="1" fill="#fff"/></svg>',
@@ -11,6 +12,7 @@ const ICON = {
   scope: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" stroke="#fff" stroke-width="2" fill="none"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6" stroke="#fff" stroke-width="2"/></svg>',
   fire: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" stroke="#fff" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="2" fill="#fff"/><path d="M12 1v5M12 18v5M1 12h5M18 12h5" stroke="#fff" stroke-width="2"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1" fill="#fff"/><rect x="14" y="5" width="4" height="14" rx="1" fill="#fff"/></svg>',
+  mic: '<svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3" fill="#fff"/><path d="M6 11a6 6 0 0 0 12 0" stroke="#fff" stroke-width="2" fill="none"/><path d="M12 17v4M9 21h6" stroke="#fff" stroke-width="2"/></svg>',
   hand: '<svg viewBox="0 0 24 24"><path d="M7 11V5a1.5 1.5 0 0 1 3 0v5V3.5a1.5 1.5 0 0 1 3 0V10V4.5a1.5 1.5 0 0 1 3 0V11v-3a1.5 1.5 0 0 1 3 0v7c0 4-3 7-7 7s-6-2-8-6l-2-4a1.5 1.5 0 0 1 2.5-1.5z" fill="#fff"/></svg>',
 };
 
@@ -31,7 +33,7 @@ export class Hud {
   constructor(parent: HTMLElement, mode: string) {
     const el = document.createElement('div');
     el.id = 'hud';
-    el.className = `mode-${mode} ${isTouch ? 'touch' : 'desk'}`;
+    el.className = `mode-${mode} ${isTouch ? 'touch' : 'desk'} ${profile.settings.leftFire ? 'lefty' : ''}`;
     el.innerHTML = `
       <div id="vignette"></div><div id="dmgflash"></div>
       <div id="tags"></div><div id="pops"></div>
@@ -42,6 +44,8 @@ export class Hud {
       <div class="hud-ui" id="topl">
         <button class="hbtn sm" data-act="pause">${ICON.pause}</button>
         <div id="fps"></div>
+        <div id="netping"></div>
+        <div id="voiceind">${ICON.mic}<span>A FALAR</span></div>
       </div>
       <div id="topc">
         <div class="tstat" id="tsAlive"><span>VIVOS</span><b>0</b></div>
@@ -80,6 +84,7 @@ export class Hud {
         <button class="hbtn tb" id="tbJump" data-act="jump">${ICON.jump}</button>
         <button class="hbtn tb" id="tbCrouch" data-act="crouch">${ICON.crouch}</button>
         <button class="hbtn tb" id="tbReload" data-act="reload">${ICON.reload}</button>
+        <button class="hbtn tb voice" id="tbVoice" data-act="voice">${ICON.mic}</button>
       </div>
       <div id="deskhint">CLIQUE PARA CONTROLAR · WASD mover · RATO mirar · BOTÃO DIREITO zoom · ESPAÇO saltar · C agachar</div>
     `;
@@ -291,6 +296,25 @@ export class Hud {
 
   fps(v: number | null) {
     this.text('#fps', v === null ? '' : `${v} FPS`);
+  }
+
+  /** Room-match latency, shown next to the FPS counter. null hides it (offline/bot matches). */
+  netPing(ms: number | null) {
+    this.text('#netping', ms === null ? '' : `● ${ms}ms`);
+    this.set('netpingHidden', ms === null, () => this.$('#netping').classList.toggle('hidden', ms === null));
+    this.set('netpingBad', ms !== null && ms >= 120, () => this.$('#netping').classList.toggle('bad', ms !== null && ms >= 120));
+    this.set('netpingOk', ms !== null && ms >= 60 && ms < 120, () => this.$('#netping').classList.toggle('ok', ms !== null && ms >= 60 && ms < 120));
+  }
+
+  /** Shows/hides the push-to-talk mic button — only meaningful in a room match with a teammate. */
+  setVoiceAvailable(on: boolean) {
+    this.el.classList.toggle('hasvoice', on);
+  }
+
+  /** Lights up the "a falar" indicator (and the touch mic button) while push-to-talk is held. */
+  voice(active: boolean) {
+    this.toggle('#voiceind', 'on', active);
+    this.toggle('#tbVoice', 'on', active);
   }
 
   update(dt: number) {

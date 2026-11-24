@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { DEFAULT_OUTFIT, HEROES } from '../data';
 import { profile } from '../save';
 import { sfx } from '../audio';
+import { getMicTrack } from '../voice';
 import { CharacterRig } from '../models/character';
 import type { RoomNet } from '../webrtc';
 import type { MapId } from './maps';
-import type { NetActorSnap, NetMsg } from '../netproto';
+import type { NetActorSnap, NetMsg, NetRosterMsg } from '../netproto';
 import type { MatchResult } from './match';
 import { ARENA_R, pickArena } from './match';
 import { World } from './world';
@@ -22,6 +23,8 @@ export interface NetMatchOpts {
   seed: number;
   selfActorId: number;
   hostId: string;
+  /** This client's own WebRTC peer id — needed to mesh-connect directly to teammates. */
+  selfPeerId: string;
   onEnd: (r: MatchResult) => void;
 }
 
@@ -56,12 +59,22 @@ export class NetMatch {
   private far: number;
   private onEndCb: (r: MatchResult) => void;
   private lastMsgT = 0;
+  private pingAcc = 0;
+  private pauseEl: HTMLElement;
+  private menuOpen = false;
+  private myTeam: number | null = null;
+  private voiceOn = false;
+  private selfPeerId: string;
+  private roster: { id: string; team: number }[] = [];
+  private meshConnected = false;
+  private hasTeammates = false;
 
   constructor(opts: NetMatchOpts) {
     this.renderer = opts.renderer;
     this.net = opts.net;
     this.selfId = opts.selfActorId;
     this.hostId = opts.hostId;
+    this.selfPeerId = opts.selfPeerId;
     this.onEndCb = opts.onEnd;
     this.camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 700);
     this.camera.rotation.order = 'YXZ';
@@ -90,6 +103,14 @@ export class NetMatch {
     this.hud = new Hud(opts.root, 'squad');
     this.input = new Input(opts.canvas, this.hud.el);
     this.input.enabled = true;
+    // A match can't be paused — the host and everyone else keep playing — this menu only offers to leave.
+    this.pauseEl = document.createElement('div');
+    this.pauseEl.id = 'pausemenu';
+    this.pauseEl.innerHTML = `<div class="pbox"><h2>MENU</h2><button class="btn-ghost" data-p="quit">SAIR DA PARTIDA</button></div>`;
+    this.pauseEl.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('[data-p]')) this.quit();
+    });
+    opts.root.appendChild(this.pauseEl);
     this.net.onMessage = (_from, data) => {
       this.lastMsgT = performance.now();
       this.onNet(data as NetMsg);
@@ -117,7 +138,32 @@ export class NetMatch {
     else if (msg.t === 'end') {
       this.over = true;
       this.onEndCb(msg.result);
-    }
+    } else if (msg.t === 'roster') this.onRoster(msg);
+  }
+
+  /** Who's on which team, by WebRTC peer id — lets us mesh-connect directly to teammate
+   *  guests for voice (the star only gives everyone a link to the host). Sent a few times
+   *  by the host just after match start in case the first copy arrives before we're ready. */
+  private onRoster(msg: NetRosterMsg) {
+    this.roster = msg.players;
+    this.tryConnectMesh();
+  }
+
+  private tryConnectMesh() {
+    if (this.meshConnected || !this.roster.length || this.myTeam === null) return;
+    this.meshConnected = true;
+    const teammates = this.roster.filter((p) => p.team === this.myTeam && p.id !== this.selfPeerId).map((p) => p.id);
+    this.hasTeammates = teammates.length > 0 || this.myTeam === 0;
+    if (this.hasTeammates) this.hud.setVoiceAvailable(true);
+    if (teammates.length) this.net.connectMesh(teammates);
+  }
+
+  private quit() {
+    if (this.over) return;
+    this.over = true;
+    this.menuOpen = false;
+    this.pauseEl.classList.remove('show');
+    this.onEndCb({ mode: 'squad', win: false, rank: 0, total: 0, kills: 0, damage: 0, time: 0, scoreA: 0, scoreB: 0, quit: true });
   }
 
   update(dt: number) {
@@ -129,7 +175,26 @@ export class NetMatch {
       return;
     }
     const inp = this.input;
+    if (inp.take('pause')) {
+      this.menuOpen = !this.menuOpen;
+      this.pauseEl.classList.toggle('show', this.menuOpen);
+      if (this.menuOpen) {
+        inp.reset();
+        document.exitPointerLock?.();
+      }
+    }
     inp.poll();
+    const talk = inp.voiceHold && this.hasTeammates;
+    if (talk !== this.voiceOn) {
+      this.voiceOn = talk;
+      this.hud.voice(talk);
+      // Host is always actor 0 on team 0; everyone else's team comes from the roster —
+      // together that covers both the star link (host) and the mesh links (teammates).
+      const teammates = new Set(this.roster.filter((p) => p.team === this.myTeam && p.id !== this.selfPeerId).map((p) => p.id));
+      if (this.myTeam === 0) teammates.add(this.hostId);
+      if (talk) getMicTrack().then((track) => { if (this.voiceOn) this.net.setVoice(track, teammates); });
+      else this.net.setVoice(null, teammates);
+    }
     const [lx, ly] = inp.consumeLook();
     const sens = 0.0009 + profile.settings.sens * 0.00042;
     this.yaw -= lx * sens;
@@ -139,6 +204,12 @@ export class NetMatch {
       jump: inp.take('jump'), reload: inp.take('reload'), gel: inp.take('gel'), nade: inp.take('nade'), heal: inp.take('heal'),
       ability: inp.take('ability'), pickup: inp.take('pickup'), slot: inp.take('slot0') ? 0 : inp.take('slot1') ? 1 : inp.take('slot2') ? 2 : -1,
     });
+
+    this.pingAcc += dt;
+    if (this.pingAcc > 0.5) {
+      this.pingAcc = 0;
+      this.hud.netPing(profile.settings.showPing ? this.net.peers().find((p) => p.id === this.hostId)?.ping ?? null : null);
+    }
 
     this.fx.update(dt);
     this.world.updateVisibility(this.camera.position, this.far);
@@ -167,6 +238,10 @@ export class NetMatch {
       rig.update(dt, { speed: s.speed, crouch: s.crouch, air: !s.onGround, pitch: s.pitch, reload: 0, glide: s.dropping && !s.onGround, dead: false, vx: s.vx, vz: s.vz }, this.world.heightAt(s.x, s.z));
     }
     for (const [id, rig] of this.rigs) if (!seen.has(id)) rig.root.visible = false;
+    if (mine && this.myTeam === null) {
+      this.myTeam = mine.team;
+      this.tryConnectMesh();
+    }
     this.updateCamera(mine);
     this.updateHud(mine);
   }
@@ -219,6 +294,7 @@ export class NetMatch {
   }
 
   dispose() {
+    this.pauseEl.remove();
     this.input.dispose();
     this.hud.dispose();
     for (const rig of this.rigs.values()) rig.dispose();
